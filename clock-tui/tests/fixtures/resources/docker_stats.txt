@@ -1,0 +1,4 @@
+mentalcorp-api|3.10%|512MiB / 7.6GiB
+mentalcorp-db|0.50%|120MiB / 7.6GiB
+old-worker|0.00%|0B / 0B
+mentalcorp-cache|1.00%|30MiB / 7.6GiB

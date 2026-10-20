@@ -1,0 +1,5 @@
+  100  12.5 409600 node
+  200   0.3  81920 postgres
+  300   1.0 204800 ClickUp
+  400  45.2 1992294 Google Chrome Helper
+  500   9.9 102400 Docker

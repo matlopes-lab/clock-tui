@@ -1,0 +1,9 @@
+p100
+fcwd
+n/Users/me/work/acme/web
+p200
+fcwd
+n/opt/homebrew/var/postgresql@17
+p300
+fcwd
+n/

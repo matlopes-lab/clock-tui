@@ -353,6 +353,26 @@ refresh_secs = 30
 
 `NO_COLOR=1` prints plain text; `TCLOCK_AGENTS_CLAUDE_HOME` and `TCLOCK_AGENTS_CODEX_HOME` point at other log directories. The regression test (`clock-tui/tests/agents-widget.sh`) runs it against fixtures with `--processes` and `--now`, so it never reads the real process table or logs.
 
+### Bundled example: resources widget (macOS)
+
+[`examples/widgets/tclock-resources`](./examples/widgets/tclock-resources) shows what is running on the machine and how it is holding up:
+
+- **Servers**: processes listening on TCP ports that were started from a project folder, with port, command, project, CPU and memory. Desktop apps (which run from `/`) and Docker's port forwarder are left out.
+- **Docker**: running containers with CPU and memory, restarting or unhealthy ones flagged, stopped ones summed up in one line.
+- **Top processes** by CPU.
+- **Machine**: CPU, RAM, free disk, network rate (compared with the previous run, kept in `~/.cache/tclock-resources`) and battery.
+
+Lines that need attention start with `!` (unhealthy containers, RAM or disk at 90% or more). Temperature is not shown, because macOS only exposes it through `sudo powermetrics` or a third-party sensor tool. Read-only, Python 3.9+ stdlib.
+
+```toml
+[[timer.widgets]]
+title = "Resources"
+command = "tclock-resources"
+refresh_secs = 10
+```
+
+The regression test (`clock-tui/tests/resources-widget.sh`) feeds recorded command output through `--fixtures` and `--now-epoch`.
+
 ### Bundled example: system-health widget
 
 The repo ships a ready-to-use widget at [`examples/widgets/tclock-system-health`](./examples/widgets/tclock-system-health). The AUR package installs it as `/usr/bin/tclock-system-health`; release tarballs include it beside `tclock`, so manual installs can extract it to `~/.local/bin` or copy it to `/usr/local/bin`. It renders a two-column health dashboard with a one-line verdict header: backup/cleanup timer freshness, timeshift snapshots, live system/jobs/storage state, and a full-width btrfs row (scrub age per filesystem, fstrim age, allocation pressure, device I/O error counters) — all without root. A failed automount whose paired mount has recovered is shown as a retained warning instead of a live failure. Low Btrfs device-unallocated space is reported as a separate allocation problem only while the filesystem still has ordinary free space; when the filesystem itself is nearly full, the storage alert remains the actionable diagnosis.

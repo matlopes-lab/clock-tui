@@ -464,7 +464,8 @@ impl App {
                 KeyCode::Char('m') => {
                     w.cycle_preset();
                 }
-                KeyCode::Enter => w.start(),
+                KeyCode::Char('r') => w.reset(),
+                KeyCode::Enter => w.toggle_paused(),
                 _ => handle_key(w, key),
             }
         } else if let Some(w) = self.stopwatch.as_mut() {
@@ -817,7 +818,7 @@ mod tests {
     }
 
     #[test]
-    fn timer_keys_cycle_the_preset_and_enter_starts_it() {
+    fn timer_keys_cycle_the_preset_toggle_with_enter_and_reset_with_r() {
         let mut app = App::try_parse_from(["tclock", "timer"]).unwrap();
         let config: Config = toml::from_str(
             r#"
@@ -854,8 +855,17 @@ mod tests {
         app.on_key(KeyCode::Enter);
         assert!(!app.timer.as_ref().unwrap().is_paused());
 
-        app.on_key(KeyCode::Char(' '));
+        app.on_key(KeyCode::Enter);
         assert!(app.timer.as_ref().unwrap().is_paused());
+
+        app.on_key(KeyCode::Char(' '));
+        assert!(!app.timer.as_ref().unwrap().is_paused());
+
+        app.on_key(KeyCode::Char('r'));
+        let timer = app.timer.as_ref().unwrap();
+        assert!(timer.is_paused());
+        assert_eq!(timer.active_preset_name(), Some("Deep"));
+        assert_eq!(timer.remaining_time(), (Duration::minutes(50), 0));
     }
 
     #[test]

@@ -102,8 +102,12 @@ impl Timer {
         true
     }
 
-    pub(crate) fn start(&mut self) {
-        self.resume();
+    /// Cancels the session: back to the start of the current preset (or the
+    /// configured durations), paused.
+    pub(crate) fn reset(&mut self) {
+        self.passed = Duration::zero();
+        self.started_at = None;
+        *self.execute_result.borrow_mut() = None;
     }
 
     fn apply_preset(&mut self, idx: usize) {
@@ -115,9 +119,7 @@ impl Timer {
             preset.titles.clone()
         };
         self.preset_idx = idx;
-        self.passed = Duration::zero();
-        self.started_at = None;
-        *self.execute_result.borrow_mut() = None;
+        self.reset();
     }
 
     fn footer(&self) -> Option<String> {
@@ -126,7 +128,7 @@ impl Timer {
         }
         match self.active_preset_name() {
             Some(name) if self.passed.is_zero() => Some(format!(
-                "{name} (press <m> for the next preset, <ENTER> to start)"
+                "{name} (press <m> for the next preset, <ENTER> to start, <r> to reset)"
             )),
             _ => Some(PAUSED_FOOTER.to_string()),
         }
@@ -368,7 +370,7 @@ mod tests {
     #[test]
     fn cycle_preset_is_ignored_while_the_timer_runs() {
         let mut timer = timer(true, Vec::new()).with_presets(presets());
-        timer.start();
+        timer.resume();
 
         assert!(!timer.cycle_preset());
         assert_eq!(timer.active_preset_name(), Some("Pomodoro"));
@@ -378,12 +380,35 @@ mod tests {
     #[test]
     fn cycle_preset_after_a_pause_restarts_from_zero() {
         let mut timer = timer(true, Vec::new()).with_presets(presets());
-        timer.start();
+        timer.resume();
         timer.pause();
 
         assert!(timer.cycle_preset());
         assert!(timer.is_paused());
         assert_eq!(timer.remaining_time(), (Duration::minutes(50), 0));
+    }
+
+    #[test]
+    fn reset_returns_to_the_start_of_the_current_preset_paused() {
+        let mut timer = timer(true, Vec::new()).with_presets(presets());
+        timer.cycle_preset();
+        timer.resume();
+
+        timer.reset();
+
+        assert!(timer.is_paused());
+        assert_eq!(timer.active_preset_name(), Some("Deep"));
+        assert_eq!(timer.remaining_time(), (Duration::minutes(50), 0));
+    }
+
+    #[test]
+    fn reset_without_presets_restarts_the_durations_paused() {
+        let mut timer = timer(false, Vec::new());
+
+        timer.reset();
+
+        assert!(timer.is_paused());
+        assert_eq!(timer.remaining_time(), (Duration::minutes(5), 0));
     }
 
     #[test]
@@ -395,7 +420,7 @@ mod tests {
         assert!(footer.contains("<m>"), "{footer}");
         assert!(footer.contains("<ENTER>"), "{footer}");
 
-        timer.start();
+        timer.resume();
         assert_eq!(timer.footer(), None);
 
         timer.pause();

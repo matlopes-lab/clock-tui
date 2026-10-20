@@ -50,7 +50,7 @@ The binary will be at `target/release/tclock`.
 tclock
 ```
 
-Press `q` to exit. In the main loop, press `c`, `w`, or `t` to switch to clock, stopwatch, or timer mode. Press `Space` to pause/resume modes that support pausing. In timer mode, `m` cycles [timer presets](#timer-presets) while paused and `Enter` starts the timer.
+Press `q` to exit. In the main loop, press `c`, `w`, or `t` to switch to clock, stopwatch, or timer mode. Press `Space` to pause/resume modes that support pausing. In timer mode, `Enter` also starts and pauses, `r` resets to zero, and `m` cycles [timer presets](#timer-presets) while paused.
 
 Use `--help` for all options:
 
@@ -125,7 +125,7 @@ tclock timer --duration 25m --execute terminal-notifier -title tclock -message "
 
 #### Timer presets
 
-Presets are named duration sets you switch between from the keyboard. When the config has at least one preset and no `--duration` was given, the timer opens paused on the first preset. Press `m` to move to the next preset and `Enter` to start; `Space` still pauses and resumes. `m` only works while the timer is paused, and switching restarts the new preset from zero, so a running session is never reset by accident.
+Presets are named duration sets you switch between from the keyboard. When the config has at least one preset and no `--duration` was given, the timer opens paused on the first preset. Press `m` to move to the next preset, `Enter` (or `Space`) to start and pause, and `r` to reset the current preset to zero, paused. `m` only works while the timer is paused, and switching restarts the new preset from zero, so a running session is never reset by accident.
 
 ```toml
 [timer]

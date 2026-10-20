@@ -1,0 +1,5 @@
+101|8000|/usr/local/bin/claude --resume|/Users/me/work/acme
+202|6000|/opt/homebrew/bin/codex|/Users/me/work/beta
+303|120|/usr/local/bin/kimi|/Users/me/work/gamma
+404|50|vim notes.md|/tmp
+505|900|/Applications/Claude.app/Contents/MacOS/Claude|/

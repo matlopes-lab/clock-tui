@@ -1,0 +1,307 @@
+#!/usr/bin/env python3
+"""tclock-agents — open coding-agent sessions for a tclock widget.
+
+    [[timer.widgets]]
+    title = "Agents"
+    command = "tclock-agents"
+    refresh_secs = 30
+
+Lists every running agent CLI (Claude Code, Codex, Gemini, Kimi, OpenCode,
+Aider, ...) with its project. For Claude Code and Codex it also reads the
+local session logs to show the chat title, model, effort, how long the session
+has been running and the tokens it used. Other agents show what the process
+table knows: project, start time and elapsed time.
+
+Read-only: it never touches the agents or their logs.
+
+Options:
+  --processes FILE   read "pid|elapsed_secs|command|cwd" lines instead of ps
+  --now ISO          reference time (UTC ISO 8601) instead of the clock
+Environment:
+  TCLOCK_AGENTS_CLAUDE_HOME  default ~/.claude
+  TCLOCK_AGENTS_CODEX_HOME   default ~/.codex
+  NO_COLOR                   plain text
+"""
+import argparse
+import glob
+import json
+import os
+import re
+import subprocess
+import sys
+from datetime import datetime, timedelta, timezone
+
+AGENTS = {
+    "claude": "Claude Code",
+    "codex": "Codex",
+    "gemini": "Gemini",
+    "kimi": "Kimi",
+    "opencode": "OpenCode",
+    "aider": "Aider",
+    "cursor-agent": "Cursor Agent",
+    "qwen": "Qwen Code",
+    "goose": "Goose",
+    "crush": "Crush",
+}
+INTERPRETERS = {"node", "bun", "deno", "python", "python3"}
+CODEX_LOOKBACK_DAYS = 14
+TAIL_BYTES = 4 * 1024 * 1024
+TITLE_WIDTH = 60
+
+
+def parse_time(value):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def parse_etime(value):
+    """ps etime: [[dd-]hh:]mm:ss -> seconds."""
+    days = 0
+    if "-" in value:
+        day_part, value = value.split("-", 1)
+        days = int(day_part)
+    parts = [int(p) for p in value.split(":")]
+    while len(parts) < 3:
+        parts.insert(0, 0)
+    hours, minutes, seconds = parts
+    return ((days * 24 + hours) * 60 + minutes) * 60 + seconds
+
+
+def agent_kind(command):
+    """The agent key for a command line, or None when it is not an agent."""
+    args = command.split()
+    for position, arg in enumerate(args[:2]):
+        name = os.path.basename(arg)
+        if name in AGENTS:
+            return name
+        if position == 0 and name not in INTERPRETERS:
+            return None
+    return None
+
+
+def live_processes():
+    out = subprocess.run(
+        ["ps", "-axo", "pid=,etime=,args="], capture_output=True, text=True
+    ).stdout
+    found = []
+    for line in out.splitlines():
+        fields = line.split(None, 2)
+        if len(fields) < 3:
+            continue
+        pid, etime, command = fields
+        if agent_kind(command):
+            found.append([pid, parse_etime(etime), command, ""])
+    if found:
+        cwd_out = subprocess.run(
+            ["lsof", "-a", "-d", "cwd", "-Fpn", "-p", ",".join(p[0] for p in found)],
+            capture_output=True,
+            text=True,
+        ).stdout
+        cwds, pid = {}, None
+        for line in cwd_out.splitlines():
+            if line.startswith("p"):
+                pid = line[1:]
+            elif line.startswith("n") and pid:
+                cwds[pid] = line[1:]
+        for proc in found:
+            proc[3] = cwds.get(proc[0], "")
+    return [tuple(p) for p in found]
+
+
+def fixture_processes(path):
+    procs = []
+    with open(path) as handle:
+        for line in handle:
+            fields = line.rstrip("\n").split("|")
+            if len(fields) == 4 and agent_kind(fields[2]):
+                procs.append((fields[0], int(fields[1]), fields[2], fields[3]))
+    return procs
+
+
+def read_json_lines(path, tail=False):
+    with open(path, "rb") as handle:
+        if tail:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - TAIL_BYTES))
+            if size > TAIL_BYTES:
+                handle.readline()
+        for raw in handle:
+            try:
+                yield json.loads(raw)
+            except ValueError:
+                continue
+
+
+def recent_files(paths, count):
+    return sorted(paths, key=os.path.getmtime, reverse=True)[:count]
+
+
+def claude_sessions(home, cwd, count):
+    project = re.sub(r"[^A-Za-z0-9]", "-", cwd)
+    files = recent_files(glob.glob(os.path.join(home, "projects", project, "*.jsonl")), count)
+    return [claude_session(path) for path in files]
+
+
+def claude_session(path):
+    session = {"tokens": 0}
+    for entry in read_json_lines(path):
+        stamp = parse_time(entry.get("timestamp"))
+        if stamp and "start" not in session:
+            session["start"] = stamp
+        if entry.get("type") in ("ai-title", "custom-title"):
+            session["title"] = entry.get("aiTitle") or entry.get("customTitle")
+        if entry.get("effort"):
+            session["effort"] = entry["effort"]
+        message = entry.get("message")
+        if entry.get("type") == "assistant" and isinstance(message, dict):
+            if message.get("model"):
+                session["model"] = message["model"]
+            usage = message.get("usage") or {}
+            session["tokens"] += sum(
+                usage.get(key) or 0
+                for key in (
+                    "input_tokens",
+                    "cache_creation_input_tokens",
+                    "cache_read_input_tokens",
+                    "output_tokens",
+                )
+            )
+    return session
+
+
+def codex_sessions(home, cwd, count, now):
+    candidates = []
+    for days_back in range(CODEX_LOOKBACK_DAYS):
+        day = now - timedelta(days=days_back)
+        pattern = os.path.join(home, "sessions", day.strftime("%Y/%m/%d"), "*.jsonl")
+        for path in glob.glob(pattern):
+            meta = next(read_json_lines(path), {})
+            if meta.get("type") == "session_meta" and meta["payload"].get("cwd") == cwd:
+                candidates.append(path)
+    names = codex_thread_names(home)
+    return [codex_session(path, names) for path in recent_files(candidates, count)]
+
+
+def codex_thread_names(home):
+    names = {}
+    index = os.path.join(home, "session_index.jsonl")
+    if os.path.exists(index):
+        for entry in read_json_lines(index):
+            if entry.get("id") and entry.get("thread_name"):
+                names[entry["id"]] = entry["thread_name"]
+    return names
+
+
+def codex_session(path, names):
+    meta = next(read_json_lines(path))["payload"]
+    session = {"start": parse_time(meta.get("timestamp")), "title": names.get(meta.get("id"))}
+    for entry in read_json_lines(path, tail=True):
+        payload = entry.get("payload") or {}
+        if entry.get("type") == "turn_context":
+            session["model"] = payload.get("model") or session.get("model")
+            session["effort"] = payload.get("effort") or session.get("effort")
+        elif payload.get("type") == "token_count" and payload.get("info"):
+            total = payload["info"].get("total_token_usage") or {}
+            session["tokens"] = total.get("total_tokens")
+    return session
+
+
+def format_duration(seconds):
+    minutes = max(0, int(seconds)) // 60
+    days, minutes = divmod(minutes, 24 * 60)
+    hours, minutes = divmod(minutes, 60)
+    if days:
+        return "{}d{}h".format(days, hours)
+    if hours:
+        return "{}h{:02d}m".format(hours, minutes)
+    return "{}m".format(minutes)
+
+
+def format_tokens(tokens):
+    if tokens >= 1_000_000_000:
+        return "{:.1f}B".format(tokens / 1_000_000_000)
+    if tokens >= 1_000_000:
+        return "{:.1f}M".format(tokens / 1_000_000)
+    if tokens >= 1_000:
+        return "{:.1f}k".format(tokens / 1_000)
+    return str(tokens)
+
+
+def format_since(start, now):
+    """Local start time, with the date when it was not today."""
+    local_start, local_now = start.astimezone(), now.astimezone()
+    if local_start.date() == local_now.date():
+        return "since " + local_start.strftime("%H:%M")
+    return "since " + local_start.strftime("%d/%m %H:%M")
+
+
+def style(text, code):
+    if os.environ.get("NO_COLOR"):
+        return text
+    return "\033[{}m{}\033[0m".format(code, text)
+
+
+def render(entries, now):
+    if not entries:
+        return "No agent sessions running"
+    lines = []
+    for kind, cwd, session in entries:
+        project = os.path.basename(cwd.rstrip("/")) or cwd or "?"
+        lines.append(style("{} · {}".format(AGENTS[kind], project), "1"))
+        title = session.get("title")
+        if title:
+            if len(title) > TITLE_WIDTH:
+                title = title[: TITLE_WIDTH - 1] + "…"
+            lines.append("  " + title)
+        start = session["start"]
+        details = [
+            session.get("model"),
+            session.get("effort"),
+            format_duration((now - start).total_seconds()),
+            format_since(start, now),
+        ]
+        if session.get("tokens"):
+            details.append(format_tokens(session["tokens"]) + " tok")
+        lines.append(style("  " + " · ".join(d for d in details if d), "2"))
+    return "\n".join(lines)
+
+
+def collect(procs, now):
+    claude_home = os.environ.get("TCLOCK_AGENTS_CLAUDE_HOME", os.path.expanduser("~/.claude"))
+    codex_home = os.environ.get("TCLOCK_AGENTS_CODEX_HOME", os.path.expanduser("~/.codex"))
+    groups = {}
+    for pid, elapsed, command, cwd in procs:
+        groups.setdefault((agent_kind(command), cwd), []).append(elapsed)
+
+    entries = []
+    for (kind, cwd), elapsed in sorted(groups.items()):
+        sessions = []
+        if kind == "claude":
+            sessions = claude_sessions(claude_home, cwd, len(elapsed))
+        elif kind == "codex":
+            sessions = codex_sessions(codex_home, cwd, len(elapsed), now)
+        sessions = [s for s in sessions if s.get("start")]
+        # Processes without a readable log still show up, timed from ps.
+        for seconds in sorted(elapsed)[len(sessions):]:
+            sessions.append({"start": now - timedelta(seconds=seconds)})
+        entries.extend((kind, cwd, s) for s in sessions)
+    return entries
+
+
+def main(argv):
+    parser = argparse.ArgumentParser(description="Open agent sessions for tclock.")
+    parser.add_argument("--processes")
+    parser.add_argument("--now")
+    args = parser.parse_args(argv)
+    now = parse_time(args.now) if args.now else datetime.now(timezone.utc)
+    procs = fixture_processes(args.processes) if args.processes else live_processes()
+    print(render(collect(procs, now), now))
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

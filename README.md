@@ -50,7 +50,7 @@ The binary will be at `target/release/tclock`.
 tclock
 ```
 
-Press `q` to exit. In the main loop, press `c`, `w`, or `t` to switch to clock, stopwatch, or timer mode. Press `Space` to pause/resume modes that support pausing.
+Press `q` to exit. In the main loop, press `c`, `w`, or `t` to switch to clock, stopwatch, or timer mode. Press `Space` to pause/resume modes that support pausing. In timer mode, `m` cycles [timer presets](#timer-presets) while paused and `Enter` starts the timer.
 
 Use `--help` for all options:
 
@@ -122,6 +122,27 @@ tclock timer --duration 25m --execute terminal-notifier -title tclock -message "
 ```
 
 `--execute` falls back to `[timer] execute` from the config. `--paused` starts the timer paused; `--no-millis` hides fractional seconds.
+
+#### Timer presets
+
+Presets are named duration sets you switch between from the keyboard. When the config has at least one preset and no `--duration` was given, the timer opens paused on the first preset. Press `m` to move to the next preset and `Enter` to start; `Space` still pauses and resumes. `m` only works while the timer is paused, and switching restarts the new preset from zero, so a running session is never reset by accident.
+
+```toml
+[timer]
+repeat = true
+
+[[timer.presets]]
+name = "Pomodoro 25/5"
+durations = ["25m", "5m"]
+titles = ["Focus", "Break"]
+
+[[timer.presets]]
+name = "Deep work 50/10"
+durations = ["50m", "10m"]
+titles = ["Focus", "Break"]
+```
+
+`titles` is optional per preset; without it the timer keeps `[timer] titles`. Invalid durations are skipped, and a preset with no valid duration is ignored. `--duration` on the command line bypasses presets.
 
 ![timer](./assets/demo-timer-mode.gif)
 

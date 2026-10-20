@@ -17,6 +17,15 @@ use super::{
 
 const DEFAULT_TIMER_MINUTES: i64 = 5;
 
+/// A named set of durations the timer can switch to with `m`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimerPreset {
+    pub name: String,
+    pub durations: Vec<Duration>,
+    /// Empty keeps the titles the timer was built with.
+    pub titles: Vec<String>,
+}
+
 pub struct Timer {
     pub size: u16,
     pub style: Style,
@@ -24,6 +33,9 @@ pub struct Timer {
     pub durations: Vec<Duration>,
     pub titles: Vec<String>,
     pub execute: Vec<String>,
+    base_titles: Vec<String>,
+    presets: Vec<TimerPreset>,
+    preset_idx: usize,
     auto_quit: bool,
     format: DurationFormat,
     passed: Duration,
@@ -49,7 +61,10 @@ impl Timer {
             size,
             style,
             durations: normalize_durations(durations),
+            base_titles: titles.clone(),
             titles,
+            presets: Vec::new(),
+            preset_idx: 0,
             repeat,
             execute,
             auto_quit,
@@ -58,6 +73,62 @@ impl Timer {
             started_at: (!paused).then(Instant::now),
             execute_result: RefCell::new(None),
             flash_state: RefCell::new(false),
+        }
+    }
+
+    /// Loads the first preset and waits paused, so the user can pick one with
+    /// `m` before starting. An empty list leaves the timer as built.
+    pub(crate) fn with_presets(mut self, presets: Vec<TimerPreset>) -> Self {
+        self.presets = presets;
+        if !self.presets.is_empty() {
+            self.apply_preset(0);
+        }
+        self
+    }
+
+    pub(crate) fn active_preset_name(&self) -> Option<&str> {
+        self.presets
+            .get(self.preset_idx)
+            .map(|preset| preset.name.as_str())
+    }
+
+    /// Switches to the next preset and restarts it from zero. Only allowed
+    /// while paused, so a running session is never reset by accident.
+    pub(crate) fn cycle_preset(&mut self) -> bool {
+        if self.presets.len() < 2 || !self.is_paused() {
+            return false;
+        }
+        self.apply_preset((self.preset_idx + 1) % self.presets.len());
+        true
+    }
+
+    pub(crate) fn start(&mut self) {
+        self.resume();
+    }
+
+    fn apply_preset(&mut self, idx: usize) {
+        let preset = &self.presets[idx];
+        self.durations = normalize_durations(preset.durations.clone());
+        self.titles = if preset.titles.is_empty() {
+            self.base_titles.clone()
+        } else {
+            preset.titles.clone()
+        };
+        self.preset_idx = idx;
+        self.passed = Duration::zero();
+        self.started_at = None;
+        *self.execute_result.borrow_mut() = None;
+    }
+
+    fn footer(&self) -> Option<String> {
+        if !self.is_paused() {
+            return self.execute_result.borrow().clone();
+        }
+        match self.active_preset_name() {
+            Some(name) if self.passed.is_zero() => Some(format!(
+                "{name} (press <m> for the next preset, <ENTER> to start)"
+            )),
+            _ => Some(PAUSED_FOOTER.to_string()),
         }
     }
 
@@ -171,11 +242,7 @@ impl Widget for &Timer {
                     self.style.fg(Color::Black), // Make text visible on green background
                 );
 
-                let footer = if self.is_paused() {
-                    Some(PAUSED_FOOTER.to_string())
-                } else {
-                    self.execute_result.borrow().clone()
-                };
+                let footer = self.footer();
 
                 render_centered(area, buf, &text, header, footer, Style::default());
             }
@@ -191,11 +258,7 @@ impl Widget for &Timer {
             let font = BricksFont::new(self.size);
             let text = ClockText::new(time_str.as_str().to_string(), &font, self.style);
 
-            let footer = if self.is_paused() {
-                Some(PAUSED_FOOTER.to_string())
-            } else {
-                self.execute_result.borrow().clone()
-            };
+            let footer = self.footer();
 
             render_centered(area, buf, &text, header, footer, Style::default());
         }
@@ -224,6 +287,120 @@ impl Pause for Timer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn timer(paused: bool, titles: Vec<String>) -> Timer {
+        Timer::new(
+            1,
+            Style::default(),
+            vec![Duration::minutes(5)],
+            titles,
+            true,
+            DurationFormat::HourMinSec,
+            paused,
+            false,
+            Vec::new(),
+        )
+    }
+
+    fn presets() -> Vec<TimerPreset> {
+        vec![
+            TimerPreset {
+                name: "Pomodoro".to_string(),
+                durations: vec![Duration::minutes(25), Duration::minutes(5)],
+                titles: vec!["Focus".to_string(), "Break".to_string()],
+            },
+            TimerPreset {
+                name: "Deep".to_string(),
+                durations: vec![Duration::minutes(50), Duration::minutes(10)],
+                titles: Vec::new(),
+            },
+        ]
+    }
+
+    #[test]
+    fn presets_load_the_first_preset_and_wait_paused() {
+        let timer = timer(false, Vec::new()).with_presets(presets());
+
+        assert_eq!(timer.active_preset_name(), Some("Pomodoro"));
+        assert_eq!(
+            timer.durations,
+            vec![Duration::minutes(25), Duration::minutes(5)]
+        );
+        assert_eq!(timer.titles, vec!["Focus", "Break"]);
+        assert!(timer.is_paused());
+        assert_eq!(timer.remaining_time(), (Duration::minutes(25), 0));
+    }
+
+    #[test]
+    fn no_presets_leave_the_timer_untouched() {
+        let timer = timer(false, vec!["Work".to_string()]).with_presets(Vec::new());
+
+        assert_eq!(timer.active_preset_name(), None);
+        assert_eq!(timer.durations, vec![Duration::minutes(5)]);
+        assert_eq!(timer.titles, vec!["Work"]);
+        assert!(!timer.is_paused());
+    }
+
+    #[test]
+    fn cycle_preset_moves_to_the_next_preset_and_wraps_around() {
+        let mut timer = timer(true, Vec::new()).with_presets(presets());
+
+        assert!(timer.cycle_preset());
+        assert_eq!(timer.active_preset_name(), Some("Deep"));
+        assert_eq!(
+            timer.durations,
+            vec![Duration::minutes(50), Duration::minutes(10)]
+        );
+
+        assert!(timer.cycle_preset());
+        assert_eq!(timer.active_preset_name(), Some("Pomodoro"));
+    }
+
+    #[test]
+    fn a_preset_without_titles_falls_back_to_the_configured_titles() {
+        let mut timer = timer(true, vec!["Work".to_string()]).with_presets(presets());
+
+        timer.cycle_preset();
+
+        assert_eq!(timer.titles, vec!["Work"]);
+    }
+
+    #[test]
+    fn cycle_preset_is_ignored_while_the_timer_runs() {
+        let mut timer = timer(true, Vec::new()).with_presets(presets());
+        timer.start();
+
+        assert!(!timer.cycle_preset());
+        assert_eq!(timer.active_preset_name(), Some("Pomodoro"));
+        assert!(!timer.is_paused());
+    }
+
+    #[test]
+    fn cycle_preset_after_a_pause_restarts_from_zero() {
+        let mut timer = timer(true, Vec::new()).with_presets(presets());
+        timer.start();
+        timer.pause();
+
+        assert!(timer.cycle_preset());
+        assert!(timer.is_paused());
+        assert_eq!(timer.remaining_time(), (Duration::minutes(50), 0));
+    }
+
+    #[test]
+    fn footer_names_the_preset_and_its_keys_before_the_first_start() {
+        let mut timer = timer(true, Vec::new()).with_presets(presets());
+
+        let footer = timer.footer().unwrap();
+        assert!(footer.contains("Pomodoro"), "{footer}");
+        assert!(footer.contains("<m>"), "{footer}");
+        assert!(footer.contains("<ENTER>"), "{footer}");
+
+        timer.start();
+        assert_eq!(timer.footer(), None);
+
+        timer.pause();
+        assert_eq!(timer.footer().as_deref(), Some(PAUSED_FOOTER));
+    }
 
     #[test]
     fn empty_duration_list_falls_back_to_default_timer() {

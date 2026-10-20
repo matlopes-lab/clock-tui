@@ -23,6 +23,7 @@ use self::modes::DurationFormat;
 use self::modes::Pause;
 use self::modes::Stopwatch;
 use self::modes::Timer;
+use self::modes::TimerPreset;
 
 pub mod modes;
 
@@ -348,6 +349,14 @@ impl App {
                     TIMER_DEFAULTS,
                     timer_config.map(|c| c.titles.clone()).unwrap_or_default(),
                 );
+                // `--duration` wins; otherwise presets take over `durations`.
+                let presets = if durations.is_empty() {
+                    timer_config
+                        .map(configured_timer_presets)
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
                 let durations = if durations.is_empty() {
                     timer_config
                         .map(configured_timer_durations)
@@ -360,17 +369,20 @@ impl App {
                 } else {
                     execute.clone()
                 };
-                self.timer = Some(Timer::new(
-                    size,
-                    style,
-                    durations,
-                    display.titles.clone(),
-                    *repeat || timer_config.map(|c| c.repeat).unwrap_or(false),
-                    display.duration_format(),
-                    display.start_paused,
-                    *auto_quit || timer_config.map(|c| c.auto_quit).unwrap_or(false),
-                    execute,
-                ));
+                self.timer = Some(
+                    Timer::new(
+                        size,
+                        style,
+                        durations,
+                        display.titles.clone(),
+                        *repeat || timer_config.map(|c| c.repeat).unwrap_or(false),
+                        display.duration_format(),
+                        display.start_paused,
+                        *auto_quit || timer_config.map(|c| c.auto_quit).unwrap_or(false),
+                        execute,
+                    )
+                    .with_presets(presets),
+                );
             }
             Mode::Stopwatch => {
                 let display = DisplayOptions::resolve(
@@ -448,7 +460,13 @@ impl App {
                 _ => {}
             }
         } else if let Some(w) = self.timer.as_mut() {
-            handle_key(w, key);
+            match key {
+                KeyCode::Char('m') => {
+                    w.cycle_preset();
+                }
+                KeyCode::Enter => w.start(),
+                _ => handle_key(w, key),
+            }
         } else if let Some(w) = self.stopwatch.as_mut() {
             handle_key(w, key);
         }
@@ -541,6 +559,27 @@ fn default_mode(config: Option<&Config>) -> Mode {
 /// durations`, then 5m (the README and `--help` promise exactly this chain).
 fn default_timer_config_durations() -> Vec<Duration> {
     vec![Duration::minutes(DEFAULT_TIMER_MINUTES)]
+}
+
+/// Presets with their durations parsed. Invalid durations are skipped, and a
+/// preset left with none is dropped, mirroring `configured_timer_durations`.
+fn configured_timer_presets(config: &TimerConfig) -> Vec<TimerPreset> {
+    config
+        .presets
+        .iter()
+        .filter_map(|preset| {
+            let durations = preset
+                .durations
+                .iter()
+                .filter_map(|duration| parse_duration(duration).ok())
+                .collect::<Vec<_>>();
+            (!durations.is_empty()).then(|| TimerPreset {
+                name: preset.name.clone(),
+                durations,
+                titles: preset.titles.clone(),
+            })
+        })
+        .collect()
 }
 
 fn configured_timer_durations(config: &TimerConfig) -> Vec<Duration> {
@@ -750,6 +789,73 @@ mod tests {
             configured_timer_durations(&config),
             default_timer_config_durations()
         );
+    }
+
+    #[test]
+    fn configured_timer_presets_drop_invalid_durations_and_empty_presets() {
+        let config: Config = toml::from_str(
+            r#"
+            [[timer.presets]]
+            name = "Pomodoro"
+            durations = ["25m", "bad", "5m"]
+
+            [[timer.presets]]
+            name = "Broken"
+            durations = ["bad"]
+            "#,
+        )
+        .unwrap();
+
+        let presets = configured_timer_presets(&config.timer);
+
+        assert_eq!(presets.len(), 1);
+        assert_eq!(presets[0].name, "Pomodoro");
+        assert_eq!(
+            presets[0].durations,
+            vec![Duration::minutes(25), Duration::minutes(5)]
+        );
+    }
+
+    #[test]
+    fn timer_keys_cycle_the_preset_and_enter_starts_it() {
+        let mut app = App::try_parse_from(["tclock", "timer"]).unwrap();
+        let config: Config = toml::from_str(
+            r#"
+            [[timer.presets]]
+            name = "Pomodoro"
+            durations = ["25m", "5m"]
+
+            [[timer.presets]]
+            name = "Deep"
+            durations = ["50m", "10m"]
+            "#,
+        )
+        .unwrap();
+        app.timer = Some(
+            Timer::new(
+                1,
+                Style::default(),
+                vec![Duration::minutes(5)],
+                Vec::new(),
+                true,
+                DurationFormat::HourMinSec,
+                false,
+                false,
+                Vec::new(),
+            )
+            .with_presets(configured_timer_presets(&config.timer)),
+        );
+
+        app.on_key(KeyCode::Char('m'));
+        let timer = app.timer.as_ref().unwrap();
+        assert_eq!(timer.active_preset_name(), Some("Deep"));
+        assert!(timer.is_paused());
+
+        app.on_key(KeyCode::Enter);
+        assert!(!app.timer.as_ref().unwrap().is_paused());
+
+        app.on_key(KeyCode::Char(' '));
+        assert!(app.timer.as_ref().unwrap().is_paused());
     }
 
     #[test]

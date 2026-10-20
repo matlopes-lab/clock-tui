@@ -8,12 +8,13 @@ use ratatui::{
     buffer::Buffer,
     layout::Rect,
     style::{Color, Style},
-    widgets::Widget,
 };
 
+use super::widget_panel::WidgetPanel;
 use super::{
     elapsed_since, format_duration, render_centered, should_flash, DurationFormat, PAUSED_FOOTER,
 };
+use crate::config::ClockWidgetConfig;
 
 const DEFAULT_TIMER_MINUTES: i64 = 5;
 
@@ -42,6 +43,7 @@ pub struct Timer {
     started_at: Option<Instant>,
     execute_result: RefCell<Option<String>>,
     flash_state: RefCell<bool>,
+    pub(crate) panel: WidgetPanel,
 }
 
 impl Timer {
@@ -73,6 +75,44 @@ impl Timer {
             started_at: (!paused).then(Instant::now),
             execute_result: RefCell::new(None),
             flash_state: RefCell::new(false),
+            panel: WidgetPanel::new(Vec::new(), Vec::new()),
+        }
+    }
+
+    /// Shows command widgets below the digits, as in clock mode.
+    pub(crate) fn with_widgets(
+        mut self,
+        configs: Vec<ClockWidgetConfig>,
+        themes: Vec<String>,
+    ) -> Self {
+        self.panel = WidgetPanel::new(configs, themes);
+        self
+    }
+
+    /// Draws the timer. With visible widgets the digits take the top area and
+    /// the widgets the rest, sized like clock mode; otherwise the digits fill
+    /// the screen.
+    pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer) {
+        let (remaining_time, _) = self.remaining_time();
+        let text_len = format_duration(remaining_time.abs(), self.format)
+            .chars()
+            .count();
+        match self
+            .panel
+            .layout(area, text_len, !self.titles.is_empty(), true)
+        {
+            None => self.draw(area, buf, self.size, self.style, Style::default()),
+            Some(layout) => {
+                let theme = self.panel.theme(self.style);
+                self.draw(
+                    layout.digits_area,
+                    buf,
+                    layout.digits_size,
+                    theme.clock_style,
+                    theme.text_style,
+                );
+                self.panel.render(layout, area, buf, theme);
+            }
         }
     }
 
@@ -195,8 +235,15 @@ fn execute(execute: &[String]) -> String {
     }
 }
 
-impl Widget for &Timer {
-    fn render(self, area: Rect, buf: &mut Buffer) {
+impl Timer {
+    fn draw(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        size: u16,
+        digits_style: Style,
+        text_style: Style,
+    ) {
         let (remaining_time, idx) = self.remaining_time();
 
         if remaining_time < Duration::zero() {
@@ -237,11 +284,11 @@ impl Widget for &Timer {
                     Some(self.titles[min(idx, self.titles.len() - 1)].clone())
                 };
 
-                let font = BricksFont::new(self.size);
+                let font = BricksFont::new(size);
                 let text = ClockText::new(
                     time_str.as_str().to_string(),
                     &font,
-                    self.style.fg(Color::Black), // Make text visible on green background
+                    digits_style.fg(Color::Black), // Make text visible on green background
                 );
 
                 let footer = self.footer();
@@ -257,12 +304,12 @@ impl Widget for &Timer {
                 Some(self.titles[min(idx, self.titles.len() - 1)].clone())
             };
 
-            let font = BricksFont::new(self.size);
-            let text = ClockText::new(time_str.as_str().to_string(), &font, self.style);
+            let font = BricksFont::new(size);
+            let text = ClockText::new(time_str.as_str().to_string(), &font, digits_style);
 
             let footer = self.footer();
 
-            render_centered(area, buf, &text, header, footer, Style::default());
+            render_centered(area, buf, &text, header, footer, text_style);
         }
     }
 }
@@ -409,6 +456,44 @@ mod tests {
 
         assert!(timer.is_paused());
         assert_eq!(timer.remaining_time(), (Duration::minutes(5), 0));
+    }
+
+    #[test]
+    fn widgets_push_the_digits_to_the_top_half() {
+        let widget = ClockWidgetConfig {
+            title: Some("Agents".to_string()),
+            command: vec!["true".to_string()],
+            popup_actions: Vec::new(),
+            refresh_secs: 900,
+            timeout_secs: 30,
+            position: Default::default(),
+            group: None,
+        };
+        let area = Rect::new(0, 0, 160, 50);
+        let mut timer =
+            timer(true, vec!["Focus".to_string()]).with_widgets(vec![widget], Vec::new());
+        let mut buf = Buffer::empty(area);
+
+        timer.render(area, &mut buf);
+
+        let layout = timer
+            .panel
+            .layout(area, 7, true, true)
+            .expect("widgets are shown");
+        assert!(layout.digits_area.height <= area.height / 2);
+        let widget_text: String = (layout.widgets_area.top()..layout.widgets_area.bottom())
+            .flat_map(|y| (0..area.width).map(move |x| (x, y)))
+            .map(|(x, y)| buf[(x, y)].symbol().to_string())
+            .collect();
+        assert!(widget_text.contains("Agents"), "{widget_text}");
+        let digits_text: String = (layout.digits_area.top()..layout.digits_area.bottom())
+            .flat_map(|y| (0..area.width).map(move |x| (x, y)))
+            .map(|(x, y)| buf[(x, y)].symbol().to_string())
+            .collect();
+        assert!(
+            digits_text.contains("PAUSED"),
+            "footer missing: {digits_text}"
+        );
     }
 
     #[test]

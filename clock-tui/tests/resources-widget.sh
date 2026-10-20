@@ -49,6 +49,16 @@ second=$(run "$later" 1010)
 rm -rf "$later"
 expect_line "$second" 'Net down 1.0 MB/s · up 100 KB/s'
 
+# Commands run under a pt_BR locale print decimal commas.
+comma=$(python3 -I -c '
+import importlib.machinery, importlib.util, sys
+loader = importlib.machinery.SourceFileLoader("w", sys.argv[1])
+spec = importlib.util.spec_from_loader("w", loader)
+w = importlib.util.module_from_spec(spec); loader.exec_module(w)
+print(w.processes("  7  0,4 2048 node\n")["7"]["cpu"], w.COMMAND_ENV["LC_ALL"])
+' "$widget")
+[ "$comma" = "0.4 C" ] || fail "decimal comma / locale: [$comma]"
+
 nodocker=$(run "$tests_dir/fixtures/resources-nodocker" 2000)
 expect_line "$nodocker" 'Docker not running'
 

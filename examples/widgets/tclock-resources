@@ -1,0 +1,320 @@
+#!/usr/bin/env python3
+"""tclock-resources — local servers and machine health for a tclock widget (macOS).
+
+    [[timer.widgets]]
+    title = "Resources"
+    command = "tclock-resources"
+    refresh_secs = 10
+
+Top: servers listening on TCP ports that were started from a project folder
+(desktop apps run from "/" and are left out), Docker containers, and the
+processes using the most CPU. Bottom: CPU, RAM, disk, network rate and battery.
+Lines that need attention start with "!". Temperature is not shown: macOS only
+exposes it through `sudo powermetrics` or a third-party sensor tool.
+
+Read-only. Network rate compares with the previous run, kept in
+$TCLOCK_RESOURCES_STATE (default ~/.cache/tclock-resources).
+
+Options:
+  --fixtures DIR    read each command's output from DIR/<name>.txt (tests)
+  --now-epoch SECS  reference time in seconds (tests)
+"""
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+
+COMMANDS = {
+    "lsof_listen": ["lsof", "+c", "0", "-nP", "-iTCP", "-sTCP:LISTEN", "-Fpcn"],
+    "ps": ["ps", "-axo", "pid=,%cpu=,rss=,comm="],
+    "sysctl": ["sysctl", "-n", "hw.memsize", "hw.ncpu"],
+    "vm_stat": ["vm_stat"],
+    "df": ["df", "-k", "/System/Volumes/Data"],
+    "netstat": ["netstat", "-ibn"],
+    "pmset": ["pmset", "-g", "batt"],
+    "docker_ps": ["docker", "ps", "-a", "--format", "{{.Names}}|{{.Status}}"],
+    "docker_stats": [
+        "docker", "stats", "--no-stream", "--format", "{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}",
+    ],
+}
+# Numbers come out with a decimal point whatever the user's locale, and the
+# Homebrew and Docker Desktop CLIs are found even when tclock was started
+# without the login shell's PATH.
+EXTRA_PATH = ["/opt/homebrew/bin", "/usr/local/bin", "/Applications/Docker.app/Contents/Resources/bin"]
+COMMAND_ENV = dict(
+    os.environ,
+    LC_ALL="C",
+    PATH=":".join([os.environ.get("PATH", "/usr/bin:/bin")] + EXTRA_PATH),
+)
+TOP_PROCESSES = 3
+DISK_ALERT_PERCENT = 90
+RAM_ALERT_PERCENT = 90
+GIB = 1024 ** 3
+
+
+class Source:
+    """Runs a command, or reads its recorded output when testing."""
+
+    def __init__(self, fixtures):
+        self.fixtures = fixtures
+
+    def read(self, name, extra=None):
+        if self.fixtures:
+            path = os.path.join(self.fixtures, name + ".txt")
+            if not os.path.exists(path):
+                return None
+            with open(path) as handle:
+                return handle.read()
+        try:
+            done = subprocess.run(
+                COMMANDS[name] + (extra or []),
+                capture_output=True,
+                text=True,
+                timeout=8,
+                env=COMMAND_ENV,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        return done.stdout if done.returncode == 0 else None
+
+
+def lsof_records(text):
+    """-F output -> {pid: {"command": str, "names": [str]}}."""
+    records, pid = {}, None
+    for line in (text or "").splitlines():
+        tag, value = line[:1], line[1:]
+        if tag == "p":
+            pid = value
+            records.setdefault(pid, {"command": "", "names": []})
+        elif pid and tag == "c":
+            records[pid]["command"] = value
+        elif pid and tag == "n":
+            records[pid]["names"].append(value)
+    return records
+
+
+def processes(text):
+    rows = {}
+    for line in (text or "").splitlines():
+        fields = line.split(None, 3)
+        if len(fields) == 4:
+            rows[fields[0]] = {
+                "cpu": float(fields[1].replace(",", ".")),
+                "rss_kb": int(fields[2]),
+                "name": os.path.basename(fields[3]),
+            }
+    return rows
+
+
+def project_label(path):
+    parts = [p for p in path.split("/") if p]
+    return "/".join(parts[-2:]) if parts else "/"
+
+
+def mb(kb):
+    return "{} MB".format(round(kb / 1024))
+
+
+def size_kb(kb):
+    return "{:.1f} GB".format(kb / 1024 / 1024) if kb >= 1024 * 1024 else mb(kb)
+
+
+def servers(source, procs):
+    listening = lsof_records(source.read("lsof_listen"))
+    if not listening:
+        return ["  none"]
+    if source.fixtures:
+        cwd_text = source.read("lsof_cwd")
+    else:
+        cwd_text = subprocess.run(
+            ["lsof", "-a", "-d", "cwd", "-Fpn", "-p", ",".join(listening)],
+            capture_output=True,
+            text=True,
+            env=COMMAND_ENV,
+        ).stdout
+    cwds = {pid: rec["names"][0] for pid, rec in lsof_records(cwd_text).items() if rec["names"]}
+
+    lines = []
+    for pid, rec in sorted(listening.items(), key=lambda item: port_of(item[1])):
+        cwd = cwds.get(pid, "/")
+        # Desktop apps run from "/"; Docker's backend only forwards container
+        # ports, which the Docker section already shows.
+        if cwd == "/" or rec["command"].startswith("com.docker."):
+            continue
+        ports = sorted({port_of_name(name) for name in rec["names"]}, key=int)
+        proc = procs.get(pid, {"cpu": 0.0, "rss_kb": 0})
+        lines.append(
+            "  {}  {}  {}  {:.1f}% cpu  {}".format(
+                " ".join(":" + port for port in ports),
+                rec["command"],
+                project_label(cwd),
+                proc["cpu"],
+                mb(proc["rss_kb"]),
+            )
+        )
+    return lines or ["  none"]
+
+
+def port_of_name(name):
+    return name.rsplit(":", 1)[-1]
+
+
+def port_of(record):
+    ports = [int(port_of_name(n)) for n in record["names"] if port_of_name(n).isdigit()]
+    return min(ports) if ports else 0
+
+
+def docker(source):
+    listing = source.read("docker_ps")
+    if listing is None:
+        return ["  Docker not running"]
+    stats = {}
+    for line in (source.read("docker_stats") or "").splitlines():
+        fields = line.split("|")
+        if len(fields) == 3:
+            stats[fields[0]] = (fields[1], fields[2].split(" / ")[0])
+    lines, stopped = [], 0
+    for line in listing.splitlines():
+        if "|" not in line:
+            continue
+        name, status = line.split("|", 1)
+        if status.startswith(("Exited", "Created")):
+            stopped += 1
+            continue
+        running = status.startswith("Up")
+        healthy = running and "unhealthy" not in status
+        cpu, mem = stats.get(name, ("", ""))
+        detail = "  {} cpu  {}".format(cpu, mem) if cpu and running else ""
+        lines.append("{}{}  {}{}".format("  " if healthy else "! ", name, status, detail))
+    if stopped:
+        lines.append("  {} stopped".format(stopped))
+    return lines or ["  no containers"]
+
+
+def top_processes(procs):
+    ranked = sorted(procs.values(), key=lambda p: p["cpu"], reverse=True)[:TOP_PROCESSES]
+    return ["  {}  {:.1f}% cpu  {}".format(p["name"], p["cpu"], size_kb(p["rss_kb"])) for p in ranked]
+
+
+def machine(source, procs, now, state_dir):
+    lines = []
+    sysctl = (source.read("sysctl") or "").split()
+    total_bytes = int(sysctl[0]) if sysctl else 0
+    ncpu = int(sysctl[1]) if len(sysctl) > 1 else 1
+
+    cpu = sum(p["cpu"] for p in procs.values()) / max(ncpu, 1)
+    lines.append("  CPU {}% of {} cores".format(round(cpu), ncpu))
+
+    vm = source.read("vm_stat") or ""
+    page = re.search(r"page size of (\d+) bytes", vm)
+    if page and total_bytes:
+        def pages(label):
+            found = re.search(r"Pages {}:\s+(\d+)".format(label), vm)
+            return int(found.group(1)) if found else 0
+
+        used = (pages("active") + pages("wired down") + pages("occupied by compressor")) * int(
+            page.group(1)
+        )
+        percent = round(used * 100 / total_bytes)
+        marker = "! " if percent >= RAM_ALERT_PERCENT else "  "
+        lines.append(
+            "{}RAM {:.1f} of {:.1f} GB ({}%)".format(marker, used / GIB, total_bytes / GIB, percent)
+        )
+
+    df_rows = (source.read("df") or "").splitlines()
+    if len(df_rows) > 1:
+        fields = df_rows[-1].split()
+        total_kb, free_kb, used_pct = int(fields[1]), int(fields[3]), int(fields[4].rstrip("%"))
+        marker = "! " if used_pct >= DISK_ALERT_PERCENT else "  "
+        lines.append(
+            "{}Disk {:.1f} GB free of {:.1f} GB ({}% used)".format(
+                marker, free_kb / 1024 / 1024, total_kb / 1024 / 1024, used_pct
+            )
+        )
+
+    lines.append("  Net " + network_rate(source.read("netstat"), now, state_dir))
+
+    batt = re.search(r"(\d+)%; ([\w ]+?);", source.read("pmset") or "")
+    if batt:
+        lines.append("  Battery {}% {}".format(batt.group(1), batt.group(2)))
+    return lines
+
+
+def network_totals(text):
+    received = sent = 0
+    for line in (text or "").splitlines()[1:]:
+        fields = line.split()
+        if len(fields) >= 10 and "<Link#" in line and not fields[0].startswith("lo"):
+            received += int(fields[-5])
+            sent += int(fields[-2])
+    return received, sent
+
+
+def rate(bytes_per_sec):
+    for unit, size in (("MB/s", 1e6), ("KB/s", 1e3)):
+        if bytes_per_sec >= size:
+            value = bytes_per_sec / size
+            return ("{:.1f} {}" if unit == "MB/s" else "{:.0f} {}").format(value, unit)
+    return "{:.0f} B/s".format(bytes_per_sec)
+
+
+def network_rate(text, now, state_dir):
+    received, sent = network_totals(text)
+    path = os.path.join(state_dir, "net.json")
+    previous = None
+    try:
+        with open(path) as handle:
+            previous = json.load(handle)
+    except (OSError, ValueError):
+        pass
+    try:
+        os.makedirs(state_dir, exist_ok=True)
+        with open(path, "w") as handle:
+            json.dump({"at": now, "received": received, "sent": sent}, handle)
+    except OSError:
+        pass
+    if not previous or now <= previous["at"] or received < previous["received"]:
+        return "collecting first sample"
+    seconds = now - previous["at"]
+    return "down {} · up {}".format(
+        rate((received - previous["received"]) / seconds),
+        rate((sent - previous["sent"]) / seconds),
+    )
+
+
+def style(text):
+    if os.environ.get("NO_COLOR"):
+        return text
+    return "\033[1m{}\033[0m".format(text)
+
+
+def main(argv):
+    parser = argparse.ArgumentParser(description="Servers and machine health for tclock.")
+    parser.add_argument("--fixtures")
+    parser.add_argument("--now-epoch", type=float)
+    args = parser.parse_args(argv)
+    source = Source(args.fixtures)
+    now = args.now_epoch if args.now_epoch is not None else time.time()
+    state_dir = os.environ.get(
+        "TCLOCK_RESOURCES_STATE", os.path.expanduser("~/.cache/tclock-resources")
+    )
+
+    procs = processes(source.read("ps"))
+    sections = [
+        ("Servers", servers(source, procs)),
+        ("Docker", docker(source)),
+        ("Top processes", top_processes(procs)),
+        ("Machine", machine(source, procs, now, state_dir)),
+    ]
+    out = []
+    for title, lines in sections:
+        out.append(style(title))
+        out.extend(lines)
+    print("\n".join(out))
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

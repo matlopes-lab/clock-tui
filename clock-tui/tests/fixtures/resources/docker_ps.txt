@@ -1,0 +1,5 @@
+mentalcorp-api|Up 2 hours
+mentalcorp-db|Up 2 hours (healthy)
+old-worker|Restarting (1) 5 seconds ago
+legacy-db|Exited (255) 5 days ago
+mentalcorp-cache|Up 3 minutes (unhealthy)

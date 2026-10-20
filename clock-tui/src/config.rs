@@ -161,8 +161,22 @@ pub struct TimerConfig {
     pub auto_quit: bool,
     #[serde(default)]
     pub execute: Vec<String>,
+    /// Named duration sets cycled with `m` while the timer is paused. When any
+    /// valid preset exists and no `--duration` was given, the timer opens
+    /// paused on the first one instead of using `durations`.
+    #[serde(default)]
+    pub presets: Vec<TimerPresetConfig>,
     #[serde(flatten)]
     pub display: DisplayConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TimerPresetConfig {
+    pub name: String,
+    pub durations: Vec<String>,
+    /// One title per duration. Empty keeps the timer's configured titles.
+    #[serde(default)]
+    pub titles: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -455,6 +469,31 @@ mod tests {
         assert_eq!(config.timer.display, DisplayConfig::default());
         assert!(!config.timer.repeat);
         assert!(config.timer.durations.is_empty());
+        assert!(config.timer.presets.is_empty());
+    }
+
+    #[test]
+    fn timer_presets_parse_with_optional_titles() {
+        let config: Config = toml::from_str(
+            r#"
+            [[timer.presets]]
+            name = "Pomodoro"
+            durations = ["25m", "5m"]
+            titles = ["Focus", "Break"]
+
+            [[timer.presets]]
+            name = "Deep"
+            durations = ["100m", "20m"]
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(config.timer.presets.len(), 2);
+        assert_eq!(config.timer.presets[0].name, "Pomodoro");
+        assert_eq!(config.timer.presets[0].durations, vec!["25m", "5m"]);
+        assert_eq!(config.timer.presets[0].titles, vec!["Focus", "Break"]);
+        assert_eq!(config.timer.presets[1].name, "Deep");
+        assert!(config.timer.presets[1].titles.is_empty());
     }
 
     #[test]

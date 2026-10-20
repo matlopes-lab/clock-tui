@@ -22,7 +22,7 @@ use ratatui::{
     widgets::{Paragraph, Widget},
 };
 pub(crate) use stopwatch::Stopwatch;
-pub(crate) use timer::Timer;
+pub(crate) use timer::{Timer, TimerPreset};
 
 pub(crate) const PAUSED_FOOTER: &str = "PAUSED (press <SPACE> to resume)";
 const FLASH_PERIOD_MILLIS: i64 = 1000;

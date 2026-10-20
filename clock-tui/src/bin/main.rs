@@ -68,7 +68,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                     KeyCode::Char('q') => break,
                     _ if app.has_widget_popup_open() => app.on_widget_popup_key(key.code),
                     _ if app.open_widget_popup_action(key.code) => {}
-                    KeyCode::Char(' ') => app.on_key(KeyCode::Char(' ')),
+                    KeyCode::Char(' ')
+                    | KeyCode::Char('m')
+                    | KeyCode::Char('r')
+                    | KeyCode::Enter => app.on_key(key.code),
                     // Display flags given on the command line (title,
                     // seconds, millis, paused, ...) live on `app` and survive
                     // these switches; mode-specific values come from config.

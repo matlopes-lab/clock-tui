@@ -40,8 +40,15 @@ COMMANDS = {
         "docker", "stats", "--no-stream", "--format", "{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}",
     ],
 }
-# Numbers come out with a decimal point whatever the user's locale.
-COMMAND_ENV = dict(os.environ, LC_ALL="C")
+# Numbers come out with a decimal point whatever the user's locale, and the
+# Homebrew and Docker Desktop CLIs are found even when tclock was started
+# without the login shell's PATH.
+EXTRA_PATH = ["/opt/homebrew/bin", "/usr/local/bin", "/Applications/Docker.app/Contents/Resources/bin"]
+COMMAND_ENV = dict(
+    os.environ,
+    LC_ALL="C",
+    PATH=":".join([os.environ.get("PATH", "/usr/bin:/bin")] + EXTRA_PATH),
+)
 TOP_PROCESSES = 3
 DISK_ALERT_PERCENT = 90
 RAM_ALERT_PERCENT = 90

@@ -55,9 +55,9 @@ import importlib.machinery, importlib.util, sys
 loader = importlib.machinery.SourceFileLoader("w", sys.argv[1])
 spec = importlib.util.spec_from_loader("w", loader)
 w = importlib.util.module_from_spec(spec); loader.exec_module(w)
-print(w.processes("  7  0,4 2048 node\n")["7"]["cpu"], w.COMMAND_ENV["LC_ALL"])
+print(w.processes("  7  0,4 2048 node\n")["7"]["cpu"], w.COMMAND_ENV["LC_ALL"], "/opt/homebrew/bin" in w.COMMAND_ENV["PATH"].split(":"))
 ' "$widget")
-[ "$comma" = "0.4 C" ] || fail "decimal comma / locale: [$comma]"
+[ "$comma" = "0.4 C True" ] || fail "decimal comma / locale / PATH: [$comma]"
 
 nodocker=$(run "$tests_dir/fixtures/resources-nodocker" 2000)
 expect_line "$nodocker" 'Docker not running'

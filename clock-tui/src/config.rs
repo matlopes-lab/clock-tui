@@ -166,6 +166,10 @@ pub struct TimerConfig {
     /// paused on the first one instead of using `durations`.
     #[serde(default)]
     pub presets: Vec<TimerPresetConfig>,
+    /// Command widgets shown below the timer digits; same keys as
+    /// `[[clock.widgets]]`. Themes come from `[clock] widget_themes`.
+    #[serde(default)]
+    pub widgets: Vec<ClockWidgetConfig>,
     #[serde(flatten)]
     pub display: DisplayConfig,
 }
@@ -470,6 +474,33 @@ mod tests {
         assert!(!config.timer.repeat);
         assert!(config.timer.durations.is_empty());
         assert!(config.timer.presets.is_empty());
+    }
+
+    #[test]
+    fn timer_widgets_parse_like_clock_widgets() {
+        let config: Config = toml::from_str(
+            r#"
+            [[timer.widgets]]
+            title = "Agents"
+            command = ["tclock-agents", "--compact"]
+            refresh_secs = 30
+
+            [[timer.widgets]]
+            command = "tclock-resources"
+            position = "bottom"
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(config.timer.widgets.len(), 2);
+        assert_eq!(config.timer.widgets[0].title.as_deref(), Some("Agents"));
+        assert_eq!(
+            config.timer.widgets[0].command,
+            vec!["tclock-agents", "--compact"]
+        );
+        assert_eq!(config.timer.widgets[0].refresh_secs, 30);
+        assert_eq!(config.timer.widgets[1].position, WidgetPosition::Bottom);
+        assert!(config.clock.widgets.is_empty());
     }
 
     #[test]

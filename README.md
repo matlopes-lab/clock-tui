@@ -250,6 +250,22 @@ widget_themes = ["default", "evangelion", "nerv"]
 
 An empty or single-item list makes `Shift+T` harmless. For coherent app + bundled-widget theming, keep built-in names such as `default`, `evangelion`, and `nerv` unless you also add the palette to both `tclock` and `tclock-system-health`.
 
+### Widgets in timer mode
+
+Timer mode accepts the same widgets under `[[timer.widgets]]`, so a focus session can keep a status panel in view. The digits move to the top half and resize to fit, exactly as in clock mode, and every widget key works there too (`T` theme, `g` groups, `z` digits-only, popup actions, scrolling). Themes come from `[clock] widget_themes`. Timer keys (`m`, `r`, `Enter`, `Space`) keep working unless a widget popup action binds the same character.
+
+```toml
+[[timer.widgets]]
+title = "Agents"
+command = "tclock-agents"
+refresh_secs = 30
+
+[[timer.widgets]]
+title = "Resources"
+command = "tclock-resources"
+refresh_secs = 10
+```
+
 ### Widget popup actions
 
 A widget can bind any single character except the reserved quit key `q` to a popup command. The action reruns the widget command by default and appends `args`, which lets one executable provide both its compact status and its detailed view. Set `command` on the action to run a different executable instead. Action commands receive the current `TCLOCK_WIDGET_THEME` just like normal refreshes.

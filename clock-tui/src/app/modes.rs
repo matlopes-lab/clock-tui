@@ -4,6 +4,7 @@ mod countdown;
 mod pause;
 mod stopwatch;
 mod timer;
+mod widget_panel;
 
 use std::cmp::min;
 use std::fmt::Write as _;
@@ -23,6 +24,7 @@ use ratatui::{
 };
 pub(crate) use stopwatch::Stopwatch;
 pub(crate) use timer::{Timer, TimerPreset};
+pub(crate) use widget_panel::WidgetPanel;
 
 pub(crate) const PAUSED_FOOTER: &str = "PAUSED (press <SPACE> to resume)";
 const FLASH_PERIOD_MILLIS: i64 = 1000;

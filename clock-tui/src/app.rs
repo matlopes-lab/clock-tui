@@ -24,6 +24,7 @@ use self::modes::Pause;
 use self::modes::Stopwatch;
 use self::modes::Timer;
 use self::modes::TimerPreset;
+use self::modes::WidgetPanel;
 
 pub mod modes;
 
@@ -369,6 +370,14 @@ impl App {
                 } else {
                     execute.clone()
                 };
+                let widget_themes = resolve_widget_themes(
+                    self.theme.as_deref(),
+                    std::env::var(WIDGET_THEME_ENV).ok().as_deref(),
+                    config
+                        .as_ref()
+                        .map(|c| c.clock.widget_themes.clone())
+                        .unwrap_or_default(),
+                );
                 self.timer = Some(
                     Timer::new(
                         size,
@@ -381,7 +390,11 @@ impl App {
                         *auto_quit || timer_config.map(|c| c.auto_quit).unwrap_or(false),
                         execute,
                     )
-                    .with_presets(presets),
+                    .with_presets(presets)
+                    .with_widgets(
+                        timer_config.map(|c| c.widgets.clone()).unwrap_or_default(),
+                        widget_themes,
+                    ),
                 );
             }
             Mode::Stopwatch => {
@@ -432,8 +445,8 @@ impl App {
     pub fn ui(&mut self, f: &mut Frame) {
         if let Some(ref mut w) = self.clock {
             w.render(f.area(), f.buffer_mut());
-        } else if let Some(ref w) = self.timer {
-            f.render_widget(w, f.area());
+        } else if let Some(ref mut w) = self.timer {
+            w.render(f.area(), f.buffer_mut());
         } else if let Some(ref w) = self.stopwatch {
             f.render_widget(w, f.area());
         } else if let Some(ref w) = self.countdown {
@@ -441,25 +454,37 @@ impl App {
         }
     }
 
+    /// The command-widget area of the active mode, if it has one.
+    fn widget_panel(&self) -> Option<&WidgetPanel> {
+        match (&self.clock, &self.timer) {
+            (Some(clock), _) => Some(&clock.panel),
+            (None, Some(timer)) => Some(&timer.panel),
+            _ => None,
+        }
+    }
+
+    fn widget_panel_mut(&mut self) -> Option<&mut WidgetPanel> {
+        match (&mut self.clock, &mut self.timer) {
+            (Some(clock), _) => Some(&mut clock.panel),
+            (None, Some(timer)) => Some(&mut timer.panel),
+            _ => None,
+        }
+    }
+
     pub fn tick(&mut self) {
-        if let Some(ref mut w) = self.clock {
-            w.tick();
+        if let Some(panel) = self.widget_panel_mut() {
+            panel.tick();
         }
     }
 
     pub fn on_key(&mut self, key: KeyCode) {
-        if let Some(w) = self.clock.as_mut() {
-            match key {
-                KeyCode::Char('T') => w.cycle_widget_theme(),
-                KeyCode::Char('g') => w.cycle_widget_group(),
-                KeyCode::Char('z') => w.toggle_widgets(),
-                KeyCode::Home => w.scroll_active_widget_to_top(),
-                KeyCode::End => w.scroll_active_widget_to_bottom(),
-                KeyCode::PageUp => w.scroll_active_widget_by_page(-1),
-                KeyCode::PageDown => w.scroll_active_widget_by_page(1),
-                _ => {}
-            }
-        } else if let Some(w) = self.timer.as_mut() {
+        if self
+            .widget_panel_mut()
+            .is_some_and(|panel| panel.on_key(key))
+        {
+            return;
+        }
+        if let Some(w) = self.timer.as_mut() {
             match key {
                 KeyCode::Char('m') => {
                     w.cycle_preset();
@@ -477,37 +502,24 @@ impl App {
         let KeyCode::Char(key) = key else {
             return false;
         };
-        self.clock
-            .as_mut()
-            .is_some_and(|clock| clock.open_widget_popup_action(key))
+        self.widget_panel_mut()
+            .is_some_and(|panel| panel.open_popup_action(key))
     }
 
     pub fn on_widget_popup_key(&mut self, key: KeyCode) {
-        let Some(clock) = self.clock.as_mut() else {
-            return;
-        };
-        match key {
-            KeyCode::Esc => clock.close_widget_popup(),
-            KeyCode::Up => clock.scroll_widget_popup(-1),
-            KeyCode::Down => clock.scroll_widget_popup(1),
-            KeyCode::PageUp => clock.scroll_widget_popup(-10),
-            KeyCode::PageDown => clock.scroll_widget_popup(10),
-            KeyCode::Home => clock.scroll_active_widget_to_top(),
-            KeyCode::End => clock.scroll_active_widget_to_bottom(),
-            _ => {}
+        if let Some(panel) = self.widget_panel_mut() {
+            panel.on_popup_key(key);
         }
     }
 
     pub fn on_mouse_scroll(&mut self, column: u16, row: u16, delta: i16) {
-        if let Some(w) = self.clock.as_mut() {
-            w.scroll_widget_at(column, row, delta);
+        if let Some(panel) = self.widget_panel_mut() {
+            panel.scroll_at(column, row, delta);
         }
     }
 
     pub fn has_widget_popup_open(&self) -> bool {
-        self.clock
-            .as_ref()
-            .is_some_and(Clock::has_widget_popup_open)
+        self.widget_panel().is_some_and(WidgetPanel::has_popup_open)
     }
 
     pub fn is_ended(&self) -> bool {
@@ -869,6 +881,36 @@ mod tests {
     }
 
     #[test]
+    fn timer_routes_widget_keys_to_its_panel_and_keeps_its_own_keys() {
+        let mut app = App::try_parse_from(["tclock", "timer"]).unwrap();
+        app.timer = Some(
+            Timer::new(
+                1,
+                Style::default(),
+                vec![Duration::minutes(5)],
+                Vec::new(),
+                false,
+                DurationFormat::HourMinSec,
+                true,
+                false,
+                Vec::new(),
+            )
+            .with_widgets(Vec::new(), vec!["default".to_string(), "nerv".to_string()]),
+        );
+
+        app.on_key(KeyCode::Char('z'));
+        assert!(!app.timer.as_ref().unwrap().panel.visible_for_test());
+        app.on_key(KeyCode::Char('T'));
+        assert_eq!(
+            app.timer.as_ref().unwrap().panel.current_theme_for_test(),
+            "nerv"
+        );
+        app.on_key(KeyCode::Enter);
+        assert!(!app.timer.as_ref().unwrap().is_paused());
+        assert!(!app.has_widget_popup_open());
+    }
+
+    #[test]
     fn timer_falls_back_to_five_minutes_without_cli_or_config_durations() {
         // `--help` and the README promise: `--duration`, then `[timer]
         // durations`, then 5m. An absent `[timer]` section must not smuggle
@@ -1078,9 +1120,9 @@ mod tests {
 
         app.on_key(KeyCode::Char('T'));
         let clock = app.clock.as_ref().expect("clock mode remains active");
-        assert_eq!(clock.current_widget_theme_for_test(), "nerv");
+        assert_eq!(clock.panel.current_theme_for_test(), "nerv");
         assert_eq!(
-            clock.current_theme_for_test().clock_style.fg,
+            clock.current_theme().clock_style.fg,
             Some(Color::Indexed(196))
         );
 
@@ -1089,7 +1131,8 @@ mod tests {
             app.clock
                 .as_ref()
                 .expect("clock mode remains active")
-                .current_widget_theme_for_test(),
+                .panel
+                .current_theme_for_test(),
             "nerv"
         );
     }
@@ -1113,11 +1156,11 @@ mod tests {
             ..App::default()
         };
 
-        assert!(app.clock.as_ref().unwrap().widgets_visible_for_test());
+        assert!(app.clock.as_ref().unwrap().panel.visible_for_test());
         app.on_key(KeyCode::Char('z'));
-        assert!(!app.clock.as_ref().unwrap().widgets_visible_for_test());
+        assert!(!app.clock.as_ref().unwrap().panel.visible_for_test());
         app.on_key(KeyCode::Char('z'));
-        assert!(app.clock.as_ref().unwrap().widgets_visible_for_test());
+        assert!(app.clock.as_ref().unwrap().panel.visible_for_test());
     }
 
     #[test]

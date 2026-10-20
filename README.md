@@ -340,6 +340,19 @@ Location comes from `--city NAME` (geocoded) or `--lat`/`--lon`. Use `--units im
 
 The raw `wttr.in` command above still works if you prefer no extra script, but the bundled widget is more reliable and testable.
 
+### Bundled example: agents widget
+
+[`examples/widgets/tclock-agents`](./examples/widgets/tclock-agents) lists the coding-agent sessions running on the machine, one block per session. It finds agent CLIs in the process table (Claude Code, Codex, Gemini, Kimi, OpenCode, Aider, Cursor Agent, Qwen Code, Goose, Crush) and the project each one runs in. For Claude Code and Codex it also reads their local session logs (`~/.claude/projects`, `~/.codex/sessions`) to show the chat title, model, effort, how long the session has run and the tokens it used; other agents show the project, start time and elapsed time. It is read-only and needs only Python 3.9+, which macOS ships.
+
+```toml
+[[timer.widgets]]
+title = "Agents"
+command = "tclock-agents"
+refresh_secs = 30
+```
+
+`NO_COLOR=1` prints plain text; `TCLOCK_AGENTS_CLAUDE_HOME` and `TCLOCK_AGENTS_CODEX_HOME` point at other log directories. The regression test (`clock-tui/tests/agents-widget.sh`) runs it against fixtures with `--processes` and `--now`, so it never reads the real process table or logs.
+
 ### Bundled example: system-health widget
 
 The repo ships a ready-to-use widget at [`examples/widgets/tclock-system-health`](./examples/widgets/tclock-system-health). The AUR package installs it as `/usr/bin/tclock-system-health`; release tarballs include it beside `tclock`, so manual installs can extract it to `~/.local/bin` or copy it to `/usr/local/bin`. It renders a two-column health dashboard with a one-line verdict header: backup/cleanup timer freshness, timeshift snapshots, live system/jobs/storage state, and a full-width btrfs row (scrub age per filesystem, fstrim age, allocation pressure, device I/O error counters) — all without root. A failed automount whose paired mount has recovered is shown as a retained warning instead of a live failure. Low Btrfs device-unallocated space is reported as a separate allocation problem only while the filesystem still has ordinary free space; when the filesystem itself is nearly full, the storage alert remains the actionable diagnosis.

@@ -9,7 +9,10 @@
 Lists every running agent CLI (Claude Code, Codex, Gemini, Kimi, OpenCode,
 Aider, ...) with its project. For Claude Code and Codex it also reads the
 local session logs to show the chat title, model, effort, how long the session
-has been running and the tokens it used. Other agents show what the process
+has been running and its current context size: the tokens of the latest model
+turn (input, cached input included, plus output), which is what the session
+carries now. Cumulative totals are not shown, since every turn re-reads the
+whole cached context and inflates them. Other agents show what the process
 table knows: project, start time and elapsed time.
 
 Read-only: it never touches the agents or their logs.
@@ -148,7 +151,7 @@ def claude_sessions(home, cwd, count):
 
 
 def claude_session(path):
-    session = {"tokens": 0}
+    session = {}
     for entry in read_json_lines(path):
         stamp = parse_time(entry.get("timestamp"))
         if stamp and "start" not in session:
@@ -158,19 +161,21 @@ def claude_session(path):
         if entry.get("effort"):
             session["effort"] = entry["effort"]
         message = entry.get("message")
-        if entry.get("type") == "assistant" and isinstance(message, dict):
+        # Subagent replies (sidechains) run with their own, smaller context.
+        if entry.get("type") == "assistant" and not entry.get("isSidechain") and isinstance(message, dict):
             if message.get("model"):
                 session["model"] = message["model"]
-            usage = message.get("usage") or {}
-            session["tokens"] += sum(
-                usage.get(key) or 0
-                for key in (
-                    "input_tokens",
-                    "cache_creation_input_tokens",
-                    "cache_read_input_tokens",
-                    "output_tokens",
+            usage = message.get("usage")
+            if usage:
+                session["context"] = sum(
+                    usage.get(key) or 0
+                    for key in (
+                        "input_tokens",
+                        "cache_creation_input_tokens",
+                        "cache_read_input_tokens",
+                        "output_tokens",
+                    )
                 )
-            )
     return session
 
 
@@ -206,8 +211,9 @@ def codex_session(path, names):
             session["model"] = payload.get("model") or session.get("model")
             session["effort"] = payload.get("effort") or session.get("effort")
         elif payload.get("type") == "token_count" and payload.get("info"):
-            total = payload["info"].get("total_token_usage") or {}
-            session["tokens"] = total.get("total_tokens")
+            last = payload["info"].get("last_token_usage") or {}
+            if last.get("total_tokens"):
+                session["context"] = last["total_tokens"]
     return session
 
 
@@ -265,8 +271,8 @@ def render(entries, now):
             format_duration((now - start).total_seconds()),
             format_since(start, now),
         ]
-        if session.get("tokens"):
-            details.append(format_tokens(session["tokens"]) + " tok")
+        if session.get("context"):
+            details.append("ctx " + format_tokens(session["context"]))
         lines.append(style("  " + " · ".join(d for d in details if d), "2"))
     return "\n".join(lines)
 

@@ -21,15 +21,17 @@ out=$(NO_COLOR=1 TZ=UTC \
 
 expect_line "$out" 'Claude Code · acme'
 expect_line "$out" 'Plano de hardening'
-expect_line "$out" 'claude-opus-5-5 · high · 2h40m · since 10:00 · 3.2k tok'
+expect_line "$out" 'claude-opus-5-5 · high · 2h40m · since 10:00 · ctx 2.0k'
 
 expect_line "$out" 'Codex · beta'
 expect_line "$out" 'Refatorar login'
-expect_line "$out" 'gpt-6-luna · medium · 1h40m · since 11:00 · 4.2M tok'
+expect_line "$out" 'gpt-6-luna · medium · 1h40m · since 11:00 · ctx 245.0k'
 
 expect_line "$out" 'Kimi · gamma'
 expect_line "$out" '2m · since 12:38'
 
+grep -qF 'tok' <<<"$out" && fail "cumulative tokens still shown"
+grep -qF 'haiku' <<<"$out" && fail "subagent reply taken as the session"
 grep -qF 'vim' <<<"$out" && fail "non-agent process listed"
 grep -qF 'Claude.app' <<<"$out" && fail "desktop app listed as a session"
 

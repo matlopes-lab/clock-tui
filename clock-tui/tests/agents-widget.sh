@@ -42,7 +42,7 @@ next_day=$(NO_COLOR=1 TZ=UTC \
   "$widget" --processes "$fixtures/processes.txt" --now 2026-10-21T09:00:00Z)
 expect_line "$next_day" '23h00m · since 20/10 10:00'
 
-big=$(NO_COLOR=1 python3 -I -c '
+big=$(NO_COLOR=1 python3 -I -B -c '
 import importlib.machinery, importlib.util, sys
 loader = importlib.machinery.SourceFileLoader("w", sys.argv[1])
 spec = importlib.util.spec_from_loader("w", loader)

@@ -50,7 +50,7 @@ rm -rf "$later"
 expect_line "$second" 'Net down 1.0 MB/s · up 100 KB/s'
 
 # Commands run under a pt_BR locale print decimal commas.
-comma=$(python3 -I -c '
+comma=$(python3 -I -B -c '
 import importlib.machinery, importlib.util, sys
 loader = importlib.machinery.SourceFileLoader("w", sys.argv[1])
 spec = importlib.util.spec_from_loader("w", loader)

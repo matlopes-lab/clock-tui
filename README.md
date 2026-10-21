@@ -373,6 +373,26 @@ refresh_secs = 10
 
 The regression test (`clock-tui/tests/resources-widget.sh`) feeds recorded command output through `--fixtures` and `--now-epoch`.
 
+### Bundled example: ClickUp widget
+
+[`examples/widgets/tclock-clickup`](./examples/widgets/tclock-clickup) shows the ClickUp tasks assigned to you, grouped by Space and List. Each task lands in one bucket from the status *type* every ClickUp list has: **overdue** (due date passed, any status), **today**, **doing** (the statuses between the first and the done ones) and **backlog** (the first status, work not started). Done and closed tasks are left out.
+
+The compact view lists overdue, today and doing tasks, up to four per list, counts the backlog, and shows a running ClickUp timer on top. `--details` lists every task with status, due date and link, which fits a popup action:
+
+```toml
+[[clock.widgets]]
+title = "ClickUp"
+command = "tclock-clickup"
+refresh_secs = 300
+
+[[clock.widgets.popup_actions]]
+key = "c"
+label = "all tasks"
+args = ["--details"]
+```
+
+The personal API token (ClickUp → Settings → Apps → API Token) is read at run time from `~/.clickup_token`, or from the file in `TCLOCK_CLICKUP_TOKEN_FILE`; keep it `chmod 600`. The widget never prints it. Read-only, Python 3.9+ stdlib. The regression test (`clock-tui/tests/clickup-widget.sh`) uses recorded API responses through `--fixtures` and `--now-ms`.
+
 ### Bundled example: system-health widget
 
 The repo ships a ready-to-use widget at [`examples/widgets/tclock-system-health`](./examples/widgets/tclock-system-health). The AUR package installs it as `/usr/bin/tclock-system-health`; release tarballs include it beside `tclock`, so manual installs can extract it to `~/.local/bin` or copy it to `/usr/local/bin`. It renders a two-column health dashboard with a one-line verdict header: backup/cleanup timer freshness, timeshift snapshots, live system/jobs/storage state, and a full-width btrfs row (scrub age per filesystem, fstrim age, allocation pressure, device I/O error counters) — all without root. A failed automount whose paired mount has recovered is shown as a retained warning instead of a live failure. Low Btrfs device-unallocated space is reported as a separate allocation problem only while the filesystem still has ordinary free space; when the filesystem itself is nearly full, the storage alert remains the actionable diagnosis.

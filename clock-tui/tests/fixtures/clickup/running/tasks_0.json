@@ -1,0 +1,158 @@
+{
+ "tasks": [
+  {
+   "id": "t1",
+   "name": "Corrigir login",
+   "url": "https://app.clickup.com/t/t1",
+   "status": {
+    "status": "in progress",
+    "type": "custom"
+   },
+   "due_date": "1792000000000",
+   "list": {
+    "id": "l1",
+    "name": "Sprint 9"
+   },
+   "space": {
+    "id": "s1"
+   }
+  },
+  {
+   "id": "t2",
+   "name": "Deploy staging",
+   "url": "https://app.clickup.com/t/t2",
+   "status": {
+    "status": "todo",
+    "type": "custom"
+   },
+   "due_date": "1792080000000",
+   "list": {
+    "id": "l1",
+    "name": "Sprint 9"
+   },
+   "space": {
+    "id": "s1"
+   }
+  },
+  {
+   "id": "t3",
+   "name": "Refatorar auth",
+   "url": "https://app.clickup.com/t/t3",
+   "status": {
+    "status": "in review",
+    "type": "custom"
+   },
+   "due_date": null,
+   "list": {
+    "id": "l1",
+    "name": "Sprint 9"
+   },
+   "space": {
+    "id": "s1"
+   }
+  },
+  {
+   "id": "t4",
+   "name": "Validar onda 1",
+   "url": "https://app.clickup.com/t/t4",
+   "status": {
+    "status": "backlog",
+    "type": "open"
+   },
+   "due_date": "1791900000000",
+   "list": {
+    "id": "l1",
+    "name": "Sprint 9"
+   },
+   "space": {
+    "id": "s1"
+   }
+  },
+  {
+   "id": "t5",
+   "name": "Ideia futura",
+   "url": "https://app.clickup.com/t/t5",
+   "status": {
+    "status": "backlog",
+    "type": "open"
+   },
+   "due_date": null,
+   "list": {
+    "id": "l2",
+    "name": "Backlog & Bugs"
+   },
+   "space": {
+    "id": "s1"
+   }
+  },
+  {
+   "id": "t6",
+   "name": "Outra ideia",
+   "url": "https://app.clickup.com/t/t6",
+   "status": {
+    "status": "backlog",
+    "type": "open"
+   },
+   "due_date": null,
+   "list": {
+    "id": "l2",
+    "name": "Backlog & Bugs"
+   },
+   "space": {
+    "id": "s1"
+   }
+  },
+  {
+   "id": "t7",
+   "name": "Treino",
+   "url": "https://app.clickup.com/t/t7",
+   "status": {
+    "status": "to do",
+    "type": "custom"
+   },
+   "due_date": null,
+   "list": {
+    "id": "l3",
+    "name": "Personal List"
+   },
+   "space": {
+    "id": "s2"
+   }
+  },
+  {
+   "id": "t8",
+   "name": "Ja entregue",
+   "url": "https://app.clickup.com/t/t8",
+   "status": {
+    "status": "done",
+    "type": "done"
+   },
+   "due_date": "1791900000000",
+   "list": {
+    "id": "l1",
+    "name": "Sprint 9"
+   },
+   "space": {
+    "id": "s1"
+   }
+  },
+  {
+   "id": "t9",
+   "name": "Ler livro",
+   "url": "https://app.clickup.com/t/t9",
+   "status": {
+    "status": "to do",
+    "type": "custom"
+   },
+   "due_date": null,
+   "list": {
+    "id": "l9",
+    "name": "Hidden List"
+   },
+   "space": {
+    "id": "s9"
+   }
+  }
+ ],
+ "last_page": true
+}

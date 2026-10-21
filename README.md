@@ -342,7 +342,7 @@ The raw `wttr.in` command above still works if you prefer no extra script, but t
 
 ### Bundled example: agents widget
 
-[`examples/widgets/tclock-agents`](./examples/widgets/tclock-agents) lists the coding-agent sessions running on the machine, one block per session. It finds agent CLIs in the process table (Claude Code, Codex, Gemini, Kimi, OpenCode, Aider, Cursor Agent, Qwen Code, Goose, Crush) and the project each one runs in. For Claude Code and Codex it also reads their local session logs (`~/.claude/projects`, `~/.codex/sessions`) to show the chat title, model, effort, how long the session has run and the tokens it used; other agents show the project, start time and elapsed time. It is read-only and needs only Python 3.9+, which macOS ships.
+[`examples/widgets/tclock-agents`](./examples/widgets/tclock-agents) lists the coding-agent sessions running on the machine, one block per session. It finds agent CLIs in the process table (Claude Code, Codex, Gemini, Kimi, OpenCode, Aider, Cursor Agent, Qwen Code, Goose, Crush) and the project each one runs in. For Claude Code and Codex it also reads their local session logs (`~/.claude/projects`, `~/.codex/sessions`) to show the chat title, model, effort, how long the session has run and its current context size (`ctx`, the tokens of the latest model turn, cached input included; subagent turns are ignored). Cumulative totals are not shown because every turn re-reads the whole cached context; other agents show the project, start time and elapsed time. It is read-only and needs only Python 3.9+, which macOS ships.
 
 ```toml
 [[timer.widgets]]

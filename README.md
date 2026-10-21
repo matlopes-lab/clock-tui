@@ -391,6 +391,12 @@ label = "all tasks"
 args = ["--details"]
 ```
 
+Lists with overdue tasks come first by default. To pin your own order, pass `--space` once per Space, in order; Spaces you leave out follow. `--exclude-list` hides a List (repeatable):
+
+```toml
+command = ["tclock-clickup", "--space", "Product", "--space", "Clients", "--exclude-list", "Personal List"]
+```
+
 The personal API token (ClickUp → Settings → Apps → API Token) is read at run time from `~/.clickup_token`, or from the file in `TCLOCK_CLICKUP_TOKEN_FILE`; keep it `chmod 600`. The widget never prints it. Read-only, Python 3.9+ stdlib. The regression test (`clock-tui/tests/clickup-widget.sh`) uses recorded API responses through `--fixtures` and `--now-ms`.
 
 ### Bundled example: system-health widget

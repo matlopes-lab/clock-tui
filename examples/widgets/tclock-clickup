@@ -28,6 +28,9 @@ $TCLOCK_CLICKUP_TOKEN_FILE) and never printed. Read-only.
 
 Options:
   --details        every task, with status, due date and link
+  --space NAME     show this Space first; repeat for an order (others follow)
+  --exclude-list NAME
+                   leave this List out; repeatable
   --fixtures DIR   read API responses from DIR (tests)
   --now-ms MS      reference time in epoch milliseconds (tests)
 """
@@ -139,12 +142,12 @@ def style(text, code):
     return "\033[{}m{}\033[0m".format(code, text)
 
 
-def render(spaces, tasks, timer, now_ms, details):
+def render(spaces, tasks, timer, now_ms, details, space_order=(), excluded_lists=()):
     today = local_date(now_ms)
     groups, totals = {}, {"overdue": 0, "today": 0, "doing": 0, "backlog": 0}
     for task in tasks:
         kind = bucket(task, today)
-        if kind is None:
+        if kind is None or task["list"]["name"] in excluded_lists:
             continue
         totals[kind] += 1
         # Personal and private spaces may be missing from the spaces listing.
@@ -169,9 +172,10 @@ def render(spaces, tasks, timer, now_ms, details):
         )
 
     def group_rank(item):
-        _, entries = item
-        space, list_name = item[0]
-        return (-sum(1 for kind, _ in entries if kind == "overdue"), space or "", list_name)
+        (space, list_name), entries = item
+        position = space_order.index(space) if space in space_order else len(space_order)
+        overdue = sum(1 for kind, _ in entries if kind == "overdue")
+        return (position, -overdue, space or "", list_name)
 
     for (space, list_name), entries in sorted(groups.items(), key=group_rank):
         entries.sort(key=lambda e: (BUCKET_ORDER[e[0]], int(e[1].get("due_date") or 0)))
@@ -194,6 +198,8 @@ def render(spaces, tasks, timer, now_ms, details):
 def main(argv):
     parser = argparse.ArgumentParser(description="Open ClickUp tasks for tclock.")
     parser.add_argument("--details", action="store_true")
+    parser.add_argument("--space", action="append", default=[])
+    parser.add_argument("--exclude-list", action="append", default=[])
     parser.add_argument("--fixtures")
     parser.add_argument("--now-ms", type=int)
     args = parser.parse_args(argv)
@@ -212,7 +218,7 @@ def main(argv):
     except Exception as error:  # network, auth or API shape: show it, never crash the widget
         print("ClickUp unavailable: {}".format(error.__class__.__name__))
         return
-    print(render(spaces, tasks, timer, now_ms, args.details))
+    print(render(spaces, tasks, timer, now_ms, args.details, args.space, args.exclude_list))
 
 
 if __name__ == "__main__":

@@ -34,6 +34,15 @@ grep -qF 'Ideia futura' <<<"$out" && fail "backlog task listed in compact view"
 first_list=$(grep -m1 ' · ' <<<"$(sed -n '3,$p' <<<"$out")")
 [ "$first_list" = "Acme · Sprint 9" ] || fail "lists with overdue tasks come first, got [$first_list]"
 
+ordered=$(run running --space Personal --space Acme --exclude-list 'Hidden List')
+expect_line "$ordered" '7 tasks · 2 overdue · 1 today · 2 doing · 2 backlog'
+headers=$(grep -E '^[^ !▶0-9].* · |^Hidden List' <<<"$ordered")
+expected_headers='Personal · Personal List
+Acme · Sprint 9
+Acme · Backlog & Bugs'
+[ "$headers" = "$expected_headers" ] || fail "space order: got
+$headers"
+
 details=$(run running --details)
 expect_line "$details" 'Ideia futura · backlog'
 expect_line "$details" 'https://app.clickup.com/t/t5'

@@ -1,0 +1,5 @@
+52428800	/Users/me/Library
+31457280	/Users/me/code
+10485760	/Users/me/Downloads
+1024	/Users/me/Music
+?	/Users/me/Huge

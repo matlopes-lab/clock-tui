@@ -362,7 +362,15 @@ refresh_secs = 30
 - **Top processes** by CPU.
 - **Machine**: CPU, RAM, free disk, network rate (compared with the previous run, kept in `~/.cache/tclock-resources`) and battery.
 
-Lines that need attention start with `!` (unhealthy containers, RAM or disk at 90% or more). Temperature is not shown, because macOS only exposes it through `sudo powermetrics` or a third-party sensor tool. Read-only, Python 3.9+ stdlib.
+Lines that need attention start with `!` (unhealthy containers, RAM or disk at 90% or more). `--details` turns that into a fix guide for a popup: with a full disk it lists the largest folders in your home (each measured in parallel with its own time limit, so a slow one shows as "still counting") and Docker's disk use, with the cleanup commands and what each removes; troubled containers get their `docker logs` command; and the processes using the most memory are listed with their pid. The guide prints commands and never runs them. Measuring a large home folder can take a minute, so give the action a longer `timeout_secs`:
+
+```toml
+[[timer.widgets.popup_actions]]
+key = "d"
+label = "what to fix"
+args = ["--details"]
+timeout_secs = 120
+``` Temperature is not shown, because macOS only exposes it through `sudo powermetrics` or a third-party sensor tool. Read-only, Python 3.9+ stdlib.
 
 ```toml
 [[timer.widgets]]

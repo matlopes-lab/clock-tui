@@ -16,6 +16,11 @@ Read-only. Network rate compares with the previous run, kept in
 $TCLOCK_RESOURCES_STATE (default ~/.cache/tclock-resources).
 
 Options:
+  --details         what needs attention and how to fix it, for a popup: the
+                    largest folders in your home and Docker's disk use when the
+                    disk is full, logs commands for troubled containers, and the
+                    processes using the most memory. Commands are printed,
+                    never run.
   --fixtures DIR    read each command's output from DIR/<name>.txt (tests)
   --now-epoch SECS  reference time in seconds (tests)
 """
@@ -36,6 +41,10 @@ COMMANDS = {
     "netstat": ["netstat", "-ibn"],
     "pmset": ["pmset", "-g", "batt"],
     "docker_ps": ["docker", "ps", "-a", "--format", "{{.Names}}|{{.Status}}"],
+    "docker_df": [
+        "docker", "system", "df", "--format",
+        "{{.Type}}|{{.TotalCount}}|{{.Active}}|{{.Size}}|{{.Reclaimable}}",
+    ],
     "docker_stats": [
         "docker", "stats", "--no-stream", "--format", "{{.Name}}|{{.CPUPerc}}|{{.MemUsage}}",
     ],
@@ -50,9 +59,44 @@ COMMAND_ENV = dict(
     PATH=":".join([os.environ.get("PATH", "/usr/bin:/bin")] + EXTRA_PATH),
 )
 TOP_PROCESSES = 3
+LARGEST_FOLDERS = 6
+FOLDER_MIN_KB = 1024 * 1024
+DU_TIMEOUT_SECS = 50
+SLOW_COMMAND_TIMEOUT_SECS = {"docker_df": 30, "docker_stats": 15}
 DISK_ALERT_PERCENT = 90
 RAM_ALERT_PERCENT = 90
 GIB = 1024 ** 3
+
+
+def home_folder_sizes():
+    """du -sk of every entry in $HOME, in parallel, as "kb\tpath" lines.
+
+    A folder that does not finish in time is reported as "?\tpath" so the
+    guide can say it is still counting instead of dropping it.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    home = os.path.expanduser("~")
+    try:
+        paths = [entry.path for entry in os.scandir(home) if not entry.is_symlink()]
+    except OSError:
+        return ""
+
+    def size(path):
+        try:
+            done = subprocess.run(
+                ["du", "-skx", path],
+                capture_output=True,
+                text=True,
+                timeout=DU_TIMEOUT_SECS,
+                env=COMMAND_ENV,
+            )
+            return done.stdout.split("\t", 1)[0].strip() or "?", path
+        except subprocess.TimeoutExpired:
+            return "?", path
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        return "\n".join("{}\t{}".format(kb, path) for kb, path in pool.map(size, paths))
 
 
 class Source:
@@ -62,6 +106,8 @@ class Source:
         self.fixtures = fixtures
 
     def read(self, name, extra=None):
+        if name == "du_home" and not self.fixtures:
+            return home_folder_sizes()
         if self.fixtures:
             path = os.path.join(self.fixtures, name + ".txt")
             if not os.path.exists(path):
@@ -73,7 +119,7 @@ class Source:
                 COMMANDS[name] + (extra or []),
                 capture_output=True,
                 text=True,
-                timeout=8,
+                timeout=SLOW_COMMAND_TIMEOUT_SECS.get(name, 8),
                 env=COMMAND_ENV,
             )
         except (OSError, subprocess.TimeoutExpired):
@@ -167,6 +213,20 @@ def port_of(record):
     return min(ports) if ports else 0
 
 
+def containers(listing):
+    """docker ps -a lines -> [(name, status, running, healthy)], stopped ones skipped."""
+    found = []
+    for line in (listing or "").splitlines():
+        if "|" not in line:
+            continue
+        name, status = line.split("|", 1)
+        if status.startswith(("Exited", "Created")):
+            continue
+        running = status.startswith("Up")
+        found.append((name, status, running, running and "unhealthy" not in status))
+    return found
+
+
 def docker(source):
     listing = source.read("docker_ps")
     if listing is None:
@@ -176,16 +236,13 @@ def docker(source):
         fields = line.split("|")
         if len(fields) == 3:
             stats[fields[0]] = (fields[1], fields[2].split(" / ")[0])
-    lines, stopped = [], 0
-    for line in listing.splitlines():
-        if "|" not in line:
-            continue
-        name, status = line.split("|", 1)
-        if status.startswith(("Exited", "Created")):
-            stopped += 1
-            continue
-        running = status.startswith("Up")
-        healthy = running and "unhealthy" not in status
+    lines = []
+    stopped = sum(
+        1
+        for line in listing.splitlines()
+        if "|" in line and line.split("|", 1)[1].startswith(("Exited", "Created"))
+    )
+    for name, status, running, healthy in containers(listing):
         cpu, mem = stats.get(name, ("", ""))
         detail = "  {} cpu  {}".format(cpu, mem) if cpu and running else ""
         lines.append("{}{}  {}{}".format("  " if healthy else "! ", name, status, detail))
@@ -224,10 +281,9 @@ def machine(source, procs, now, state_dir):
             "{}RAM {:.1f} of {:.1f} GB ({}%)".format(marker, used / GIB, total_bytes / GIB, percent)
         )
 
-    df_rows = (source.read("df") or "").splitlines()
-    if len(df_rows) > 1:
-        fields = df_rows[-1].split()
-        total_kb, free_kb, used_pct = int(fields[1]), int(fields[3]), int(fields[4].rstrip("%"))
+    disk = disk_state(source)
+    if disk:
+        total_kb, free_kb, used_pct = disk
         marker = "! " if used_pct >= DISK_ALERT_PERCENT else "  "
         lines.append(
             "{}Disk {:.1f} GB free of {:.1f} GB ({}% used)".format(
@@ -285,6 +341,80 @@ def network_rate(text, now, state_dir):
     )
 
 
+def disk_state(source):
+    df_rows = (source.read("df") or "").splitlines()
+    if len(df_rows) < 2:
+        return None
+    fields = df_rows[-1].split()
+    return int(fields[1]), int(fields[3]), int(fields[4].rstrip("%"))
+
+
+def largest_folders(text):
+    """(largest folders, folders still being counted)."""
+    sizes, pending = [], []
+    for line in (text or "").splitlines():
+        size, _, path = line.partition("\t")
+        if size == "?":
+            pending.append(path)
+        elif size.isdigit() and int(size) >= FOLDER_MIN_KB:
+            sizes.append((int(size), path))
+    return sorted(sizes, reverse=True)[:LARGEST_FOLDERS], pending
+
+
+def guide(source, procs):
+    lines = [style("What needs attention")]
+    flagged = False
+
+    disk = disk_state(source)
+    if disk and disk[2] >= DISK_ALERT_PERCENT:
+        flagged = True
+        _, free_kb, used_pct = disk
+        lines.append("! Disk {}% used, {:.1f} GB free".format(used_pct, free_kb / 1024 / 1024))
+        folders, pending = largest_folders(source.read("du_home"))
+        if folders or pending:
+            lines.append("  Largest folders in your home:")
+            lines.extend("    {:.1f} GB  {}".format(kb / 1024 / 1024, path) for kb, path in folders)
+            lines.extend("    still counting  {}".format(path) for path in pending)
+        docker_df = [
+            row.split("|")
+            for row in (source.read("docker_df") or "").splitlines()
+            if row.count("|") == 4 and not row.startswith("TYPE")
+        ]
+        if docker_df:
+            lines.append("  Docker disk use:")
+            lines.extend(
+                "    {}  {}, {} reclaimable".format(kind, size, reclaim.split(" ")[0])
+                for kind, _, _, size, reclaim in docker_df
+            )
+        lines.extend(
+            [
+                "  Commands that free space:",
+                "    docker builder prune   removes the Docker build cache",
+                "    docker system prune    removes stopped containers, unused networks, dangling images",
+                "    brew cleanup           removes old Homebrew versions and downloads",
+            ]
+        )
+
+    troubled = [c for c in containers(source.read("docker_ps")) if not c[3]]
+    for name, status, _, _ in troubled:
+        flagged = True
+        lines.append("! Container {}  {}".format(name, status))
+        lines.append("    docker logs --tail 50 {}".format(name))
+
+    if not flagged:
+        lines.append("  Nothing needs attention")
+
+    lines.append(style("Most memory"))
+    ranked = sorted(procs.items(), key=lambda item: item[1]["rss_kb"], reverse=True)[:5]
+    lines.extend(
+        "  {}  {}  pid {}".format(p["name"], size_kb(p["rss_kb"]), pid) for pid, p in ranked
+    )
+    lines.append("    kill <pid> asks a process to quit")
+    lines.append("")
+    lines.append("Nothing here is run for you; copy a command to use it.")
+    return lines
+
+
 def style(text):
     if os.environ.get("NO_COLOR"):
         return text
@@ -293,6 +423,7 @@ def style(text):
 
 def main(argv):
     parser = argparse.ArgumentParser(description="Servers and machine health for tclock.")
+    parser.add_argument("--details", action="store_true")
     parser.add_argument("--fixtures")
     parser.add_argument("--now-epoch", type=float)
     args = parser.parse_args(argv)
@@ -303,6 +434,9 @@ def main(argv):
     )
 
     procs = processes(source.read("ps"))
+    if args.details:
+        print("\n".join(guide(source, procs)))
+        return
     sections = [
         ("Servers", servers(source, procs)),
         ("Docker", docker(source)),

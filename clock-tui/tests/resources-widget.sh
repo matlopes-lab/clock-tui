@@ -59,6 +59,33 @@ print(w.processes("  7  0,4 2048 node\n")["7"]["cpu"], w.COMMAND_ENV["LC_ALL"], 
 ' "$widget")
 [ "$comma" = "0.4 C True" ] || fail "decimal comma / locale / PATH: [$comma]"
 
+guide=$(NO_COLOR=1 TCLOCK_RESOURCES_STATE="$state" "$widget" --fixtures "$fixtures" --now-epoch 3000 --details)
+expect_line "$guide" 'What needs attention'
+expect_line "$guide" 'Disk 99% used, 6.2 GB free'
+expect_line "$guide" '50.0 GB  /Users/me/Library'
+expect_line "$guide" '30.0 GB  /Users/me/code'
+grep -qF '/Users/me/Music' <<<"$guide" && fail "tiny folder listed"
+expect_line "$guide" 'still counting  /Users/me/Huge'
+expect_line "$guide" 'Build Cache  6.3GB, 6.3GB reclaimable'
+expect_line "$guide" 'docker builder prune'
+expect_line "$guide" 'docker system prune'
+expect_line "$guide" 'brew cleanup'
+expect_line "$guide" 'old-worker  Restarting'
+expect_line "$guide" 'docker logs --tail 50 old-worker'
+expect_line "$guide" 'mentalcorp-cache  Up 3 minutes (unhealthy)'
+expect_line "$guide" 'Most memory'
+expect_line "$guide" 'Google Chrome Helper  1.9 GB  pid 400'
+expect_line "$guide" 'Nothing here is run for you'
+grep -qF 'Servers' <<<"$guide" && fail "details should replace the dashboard"
+
+calm=$(mktemp -d)
+cp "$fixtures"/*.txt "$calm"/
+sed -i '' 's/ 99%/ 40%/' "$calm/df.txt"
+printf 'web|Up 2 hours\n' > "$calm/docker_ps.txt"
+calm_guide=$(NO_COLOR=1 TCLOCK_RESOURCES_STATE="$state" "$widget" --fixtures "$calm" --now-epoch 3000 --details)
+rm -rf "$calm"
+expect_line "$calm_guide" 'Nothing needs attention'
+
 nodocker=$(run "$tests_dir/fixtures/resources-nodocker" 2000)
 expect_line "$nodocker" 'Docker not running'
 

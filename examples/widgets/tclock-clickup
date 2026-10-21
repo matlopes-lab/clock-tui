@@ -1,0 +1,219 @@
+#!/usr/bin/env python3
+"""tclock-clickup — your open ClickUp tasks for a tclock widget.
+
+    [[clock.widgets]]
+    title = "ClickUp"
+    command = "tclock-clickup"
+    refresh_secs = 300
+
+    [[clock.widgets.popup_actions]]
+    key = "c"
+    label = "all tasks"
+    args = ["--details"]
+
+Shows the tasks assigned to you, grouped by Space and List. Each task falls in
+one bucket, using the status *type* every ClickUp list has:
+
+  overdue  due date passed and not done (any status)
+  today    due today
+  doing    a status between the first and the done ones ("custom" type)
+  backlog  the first status, work not started yet ("open" type)
+
+Done and closed tasks are left out. The compact view lists overdue, today and
+doing tasks (up to 4 per list) and counts the backlog; --details lists every
+task with its status, due date and link. A running ClickUp timer shows on top.
+
+The API token is read at run time from ~/.clickup_token (or the file in
+$TCLOCK_CLICKUP_TOKEN_FILE) and never printed. Read-only.
+
+Options:
+  --details        every task, with status, due date and link
+  --fixtures DIR   read API responses from DIR (tests)
+  --now-ms MS      reference time in epoch milliseconds (tests)
+"""
+import argparse
+import json
+import os
+import sys
+import time
+import urllib.request
+from datetime import datetime
+
+API = "https://api.clickup.com/api/v2"
+ITEMS_PER_LIST = 4
+NAME_WIDTH = 60
+BUCKET_ORDER = {"overdue": 0, "today": 1, "doing": 2, "backlog": 3}
+
+
+class Api:
+    def __init__(self, token, fixtures):
+        self.token, self.fixtures = token, fixtures
+
+    def get(self, path, fixture):
+        if self.fixtures:
+            with open(os.path.join(self.fixtures, fixture + ".json")) as handle:
+                return json.load(handle)
+        request = urllib.request.Request(API + path, headers={"Authorization": self.token})
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return json.load(response)
+
+
+def read_token(path):
+    try:
+        with open(path) as handle:
+            return handle.read().strip() or None
+    except OSError:
+        return None
+
+
+def fetch(api):
+    team_id = api.get("/team", "team")["teams"][0]["id"]
+    user_id = api.get("/user", "user")["user"]["id"]
+    spaces = {
+        s["id"]: s["name"]
+        for s in api.get("/team/{}/space?archived=false".format(team_id), "spaces")["spaces"]
+    }
+    tasks, page = [], 0
+    while True:
+        body = api.get(
+            "/team/{}/task?assignees[]={}&subtasks=true&include_closed=false&page={}".format(
+                team_id, user_id, page
+            ),
+            "tasks_{}".format(page),
+        )
+        tasks.extend(body.get("tasks", []))
+        if body.get("last_page", True) or not body.get("tasks"):
+            break
+        page += 1
+    timer = api.get("/team/{}/time_entries/current".format(team_id), "current").get("data")
+    return spaces, tasks, timer
+
+
+def local_date(ms):
+    return datetime.fromtimestamp(int(ms) / 1000).date()
+
+
+def bucket(task, today):
+    status_type = (task.get("status") or {}).get("type")
+    if status_type in ("done", "closed"):
+        return None
+    due = task.get("due_date")
+    if due:
+        due_day = local_date(due)
+        if due_day < today:
+            return "overdue"
+        if due_day == today:
+            return "today"
+    return "backlog" if status_type == "open" else "doing"
+
+
+def short(name):
+    return name if len(name) <= NAME_WIDTH else name[: NAME_WIDTH - 1] + "…"
+
+
+def due_label(task):
+    return local_date(task["due_date"]).strftime("%d/%m") if task.get("due_date") else ""
+
+
+def compact_line(kind, task):
+    marker = "! " if kind == "overdue" else "  "
+    suffix = {
+        "overdue": due_label(task),
+        "today": "",
+        "doing": task["status"]["status"],
+    }[kind]
+    text = short(task["name"]) + (" · " + suffix if suffix else "")
+    return "{}{:<8} {}".format(marker, kind, text)
+
+
+def detail_lines(task):
+    parts = [short(task["name"]), task["status"]["status"]]
+    if task.get("due_date"):
+        parts.append("due " + due_label(task))
+    return ["  " + " · ".join(parts), "    " + task.get("url", "")]
+
+
+def style(text, code):
+    if os.environ.get("NO_COLOR"):
+        return text
+    return "\033[{}m{}\033[0m".format(code, text)
+
+
+def render(spaces, tasks, timer, now_ms, details):
+    today = local_date(now_ms)
+    groups, totals = {}, {"overdue": 0, "today": 0, "doing": 0, "backlog": 0}
+    for task in tasks:
+        kind = bucket(task, today)
+        if kind is None:
+            continue
+        totals[kind] += 1
+        # Personal and private spaces may be missing from the spaces listing.
+        key = (spaces.get((task.get("space") or {}).get("id")), task["list"]["name"])
+        groups.setdefault(key, []).append((kind, task))
+
+    count = sum(totals.values())
+    lines = [
+        "{} tasks · {} overdue · {} today · {} doing · {} backlog".format(
+            count, totals["overdue"], totals["today"], totals["doing"], totals["backlog"]
+        )
+    ]
+    if timer and timer.get("start"):
+        minutes = max(0, (now_ms - int(timer["start"])) // 60000)
+        lines.append(
+            style(
+                "▶ {} · {}h{:02d}m".format(
+                    short((timer.get("task") or {}).get("name", "timer")), minutes // 60, minutes % 60
+                ),
+                "1",
+            )
+        )
+
+    def group_rank(item):
+        _, entries = item
+        space, list_name = item[0]
+        return (-sum(1 for kind, _ in entries if kind == "overdue"), space or "", list_name)
+
+    for (space, list_name), entries in sorted(groups.items(), key=group_rank):
+        entries.sort(key=lambda e: (BUCKET_ORDER[e[0]], int(e[1].get("due_date") or 0)))
+        active = [e for e in entries if e[0] != "backlog"]
+        backlog = len(entries) - len(active)
+        lines.append(style("{} · {}".format(space, list_name) if space else list_name, "1"))
+        if details:
+            for _, task in entries:
+                lines.extend(detail_lines(task))
+            continue
+        for kind, task in active[:ITEMS_PER_LIST]:
+            lines.append(compact_line(kind, task))
+        if len(active) > ITEMS_PER_LIST:
+            lines.append("  +{} more".format(len(active) - ITEMS_PER_LIST))
+        if backlog:
+            lines.append(style("  {} in backlog".format(backlog), "2"))
+    return "\n".join(lines)
+
+
+def main(argv):
+    parser = argparse.ArgumentParser(description="Open ClickUp tasks for tclock.")
+    parser.add_argument("--details", action="store_true")
+    parser.add_argument("--fixtures")
+    parser.add_argument("--now-ms", type=int)
+    args = parser.parse_args(argv)
+
+    if args.fixtures:
+        token = "fixture"
+    else:
+        path = os.environ.get("TCLOCK_CLICKUP_TOKEN_FILE", os.path.expanduser("~/.clickup_token"))
+        token = read_token(path)
+        if not token:
+            print("ClickUp token not found at {}".format(path))
+            return
+    now_ms = args.now_ms if args.now_ms is not None else int(time.time() * 1000)
+    try:
+        spaces, tasks, timer = fetch(Api(token, args.fixtures))
+    except Exception as error:  # network, auth or API shape: show it, never crash the widget
+        print("ClickUp unavailable: {}".format(error.__class__.__name__))
+        return
+    print(render(spaces, tasks, timer, now_ms, args.details))
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

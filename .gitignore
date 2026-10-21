@@ -1,3 +1,6 @@
 /target
 /assets/gen
 /.idea
+
+# Python bytecode from the widget scripts
+__pycache__/
